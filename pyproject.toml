@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "baseresourcelib"
+description = "Model based resources that are used to talk to APIs and Databases Directly"
+readme = "README.md"
+license = "MIT AND (Apache-2.0 OR BSD-2-Clause)"
+version = "0.1.0"
+dependencies = [
+  "marshmallow",
+  "requests",
+  "python-dateutil",
+  "mongoengine",
+]
+requires-python = ">= 3.8"
+authors = [
+  {name = "Eric Lewis", email = "thedreadpirateeric@gmail.com"},
+]
+maintainers = [
+  {name = "Eric Lewis", email = "thedreadpirateeric@gmail.com"},
+]
+
+[[tool.mypy.overrides]]
+module = [
+  "dateutil.*",
+  "mongoengine.*",
+  "marshmallow.*",
+  "requests.*",
+]
+follow_untyped_imports = true
