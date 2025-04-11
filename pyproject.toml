@@ -14,7 +14,7 @@ dependencies = [
   "python-dateutil",
   "mongoengine",
 ]
-requires-python = ">= 3.8"
+requires-python = ">= 3.11"
 authors = [
   {name = "Eric Lewis", email = "thedreadpirateeric@gmail.com"},
 ]
