@@ -4,23 +4,34 @@ build-backend = "hatchling.build"
 
 [project]
 name = "baseresourcelib"
-description = "Model based resources that are used to talk to APIs and Databases Directly"
-readme = "README.md"
-license = "MIT AND (Apache-2.0 OR BSD-2-Clause)"
-version = "0.1.0"
-dependencies = [
-  "marshmallow",
-  "requests",
-  "python-dateutil",
-  "mongoengine",
-]
-requires-python = ">= 3.11"
+version = "0.0.1"
 authors = [
   {name = "Eric Lewis", email = "thedreadpirateeric@gmail.com"},
 ]
 maintainers = [
   {name = "Eric Lewis", email = "thedreadpirateeric@gmail.com"},
 ]
+description = "Model based resources that are used to talk to APIs and Databases Directly"
+readme = "README.md"
+requires-python = ">= 3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+license = "MIT"
+license-files = ["LICEN[CS]E*"]
+
+dependencies = [
+  "marshmallow",
+  "requests",
+  "python-dateutil",
+  "mongoengine",
+]
+
+[project.urls]
+Homepage = "https://github.com/thedreadpirateeric/base-resource"
+Issues = "https://github.com/thedreadpirateeric/base-resource/issues"
+
 
 [[tool.mypy.overrides]]
 module = [

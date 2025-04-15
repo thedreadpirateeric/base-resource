@@ -5,8 +5,6 @@ import requests
 
 from baseresourcelib.connectors.base import ApiBase
 
-X_MODULE = "baseresourcelib.connectors.base."
-
 
 @pytest.fixture
 def response_with_json():
@@ -35,7 +33,7 @@ def response_without_json():
     return r
 
 
-@mock.patch(X_MODULE + "LOGGER")
+@mock.patch("baseresourcelib.connectors.base.LOGGER")
 def test_get_exception_formatted_message_with_json(mockLogger,
                                                    response_with_json):
     """Test exception formatted message with json."""
@@ -49,7 +47,7 @@ def test_get_exception_formatted_message_with_json(mockLogger,
     assert "Invalid tasks." in msg
 
 
-@mock.patch(X_MODULE + "LOGGER")
+@mock.patch("baseresourcelib.connectors.base.LOGGER")
 def test_get_exception_formatted_message_without_json(mockLogger,
                                                       response_without_json):
     """Test exception formatted message without json."""
