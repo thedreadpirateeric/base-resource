@@ -1,10 +1,8 @@
 """Get the datatype for each field to create other objects as needed."""
 # pylint: disable=R
+from typing import Any
 from marshmallow import fields as schemaFields
-try:
-    from mongoengine import fields as mongoFields
-except ImportError:
-    mongoFields = None
+from mongoengine import fields as mongoFields
 
 
 class BaseField:
@@ -15,8 +13,11 @@ class BaseField:
 
     """
 
-    def __init__(self, *args, skeys: list = None, dkeys: list = None,
-                 **kwargs) -> None:
+    sfield: type[Any] = schemaFields.Field
+    dbfield: type[Any] = mongoFields.BaseField
+
+    def __init__(self, *args, skeys: list | None = None,
+                 dkeys: list | None = None, **kwargs: dict) -> None:
         """Field classes for various types of data.
 
         Args:
@@ -86,53 +87,53 @@ class Boolean(BaseField):
     """Boolean."""
 
     sfield = schemaFields.Boolean
-    dbfield = mongoFields.BooleanField if mongoFields else None
+    dbfield = mongoFields.BooleanField
 
 
 class DateTime(BaseField):
     """DateTime."""
 
     sfield = schemaFields.DateTime
-    dbfield = mongoFields.DateTimeField if mongoFields else None
+    dbfield = mongoFields.DateTimeField
 
 
 class Dictionary(BaseField):
     """Dictionary."""
 
     sfield = schemaFields.Dict
-    dbfield = mongoFields.DictField if mongoFields else None
+    dbfield = mongoFields.DictField
 
 
 class Integer(BaseField):
     """Integer."""
 
     sfield = schemaFields.Integer
-    dbfield = mongoFields.IntField if mongoFields else None
+    dbfield = mongoFields.IntField
 
 
 class Float(BaseField):
     """Float."""
 
     sfield = schemaFields.Float
-    dbfield = mongoFields.FloatField if mongoFields else None
+    dbfield = mongoFields.FloatField
 
 
 class List(BaseField):
     """List."""
 
     sfield = schemaFields.List
-    dbfield = mongoFields.ListField if mongoFields else None
+    dbfield = mongoFields.ListField
 
 
 class String(BaseField):
     """String."""
 
     sfield = schemaFields.String
-    dbfield = mongoFields.StringField if mongoFields else None
+    dbfield = mongoFields.StringField
 
 
 class ObjectId(BaseField):
     """String."""
 
     sfield = schemaFields.String
-    dbfield = mongoFields.ObjectIdField if mongoFields else None
+    dbfield = mongoFields.ObjectIdField

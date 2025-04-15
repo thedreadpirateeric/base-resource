@@ -5,15 +5,11 @@ import os
 from typing import Any
 from typing import List
 from typing import Dict
-from typing import TypeVar
 
 from marshmallow import Schema
 from marshmallow import fields as sfields
 from marshmallow import ValidationError
-try:
-    from mongoengine import Document
-except ImportError:
-    Document = None
+from mongoengine import Document
 from bson import SON
 
 from ..utils.utils import chunkify_list
@@ -27,9 +23,6 @@ __all__ = [
     "BaseResource",
 ]
 
-TASK = TypeVar("Task")
-FIELD = TypeVar("BaseField")
-
 
 class Mode:
     """Handles the mode of operation.
@@ -41,21 +34,19 @@ class Mode:
     @staticmethod
     def make_modes():
         """All avalible modes of operation are listed in the response."""
-        modes = ["api", "rpc", "direct"]
-        if Document:
-            modes.append("db")
+        modes = ["api", "rpc", "direct", "db"]
         return tuple(modes)
 
-    def __get__(self, obj: type, objtype: type) -> None:
+    def __get__(self, obj: Any, objtype: Any) -> Any:
         """Return custom value."""
-        return obj._access_mode
+        return obj._access_mode  # type: ignore
 
-    def __set__(self, obj: type, value) -> None:
+    def __set__(self, obj: Any, value) -> None:
         """Return custom value."""
         if value not in self.make_modes():
             raise ValueError("Mode must be on of {}".
                              format(", ".join(self.make_modes())))
-        obj._access_mode = value
+        obj._access_mode = value  # type: ignore
 
 
 class Base(type):
@@ -72,7 +63,7 @@ class Base(type):
     # @classmethod
     # def __prepare__(cls, name: str, bases: tuple) -> OrderedDict:
     #     """Ensure order of attributes in the `__dict__`."""
-    #     return OrderedDict()
+    #     return Ordered{}
     #
     def __new__(mcs, name: str, bases: tuple, dct: dict) -> type:
         """Create the class."""
@@ -81,19 +72,19 @@ class Base(type):
             return super().__new__(mcs, name, bases, dct)
 
         # If we want to mix in any additional classes for creation
-        newBases = list()
+        newBases = []
         for base in bases:
             newBases.append(base)
 
-        dct = {**{"_meta": dict(), "_inner": dict(), "_fields": dict()},
+        dct = {**{"_meta": {}, "_inner": {}, "_fields": {}},
                **dct}
         # If this class has been marked as an abstract class, no fields will be
         # processed.
-        _fields = dict()
-        _inner = dict()
+        _fields = {}
+        _inner = {}
         # Are there defined fields from bases?
         for base in newBases:
-            for k, f in getattr(base, "_fields", dict()).items():
+            for k, f in getattr(base, "_fields", {}).items():
                 _fields[k] = f
         # new fields
         for key, field in {**_fields, **dct}.items():
@@ -112,58 +103,56 @@ class Base(type):
             dct['paginated'] = mcs._make_paginated_schema_class(dct['schema'])
 
         # If mongoengine is installed
-        if _fields and dct.get("_meta", dict()).get("db", dict()):
+        if _fields and dct.get("_meta", {}).get("db", {}):
             mod = {f: mcs._mongoengine_field(_fields[f]) for f in
-                   list(_fields.keys())} if Document else dict()
+                   list(_fields.keys())}
             # Look for customer meta field for passing to the docuemnt
             mmeta = dct.get(
-                "_meta", dict()).get("db", dict()).get("meta", dict())
+                "_meta", {}).get("db", {}).get("meta", {})
             if mmeta:
                 mod = {**mod, "meta": mmeta}
             # This is where the database model is created.
             dct['dbmodel'] = mcs._make_mongo_class(
-                mod, override=dct.get("_meta", dict()).get("db", dict()).get(
+                mod, override=dct.get("_meta", {}).get("db", {}).get(
                     "document", None),
-                name=dct.get("_meta", dict()).get("db", dict()).get(
+                name=dct.get("_meta", {}).get("db", {}).get(
                     "name", None))
 
         if _fields:
             dct['_fields'] = _fields
         if _inner:
             dct['_inner'] = _inner
-        dct['_uid'] = dct.get("_meta", dict()).get("uid", tuple())
+        dct['_uid'] = dct.get("_meta", {}).get("uid", tuple())
         # Create the new class to be instantiated
         return super().__new__(mcs, name, tuple(newBases), dct)
 
     @staticmethod
-    def _make_schema_class(attrs: dict) -> Schema:
+    def _make_schema_class(attrs: dict) -> type:
         return type("BaseSchema", (Schema, ), attrs)
 
     @staticmethod
-    def _make_paginated_schema_class(schema: Schema) -> Schema:
+    def _make_paginated_schema_class(schema: Schema) -> type:
         attrs = {"items": sfields.List(
             sfields.Nested(schema), attribute="items")}
         return type("BasePaginatedSchema", (PaginateSchema, ), attrs)
 
     @staticmethod
-    def _make_mongo_class(attrs: dict, override: Document = None,
-                          name: str = None) -> Document:
-        if not Document:
-            return None
+    def _make_mongo_class(attrs: dict, override: Document | None = None,
+                          name: str | None = None) -> type:
         BaseDocument = override or Document
-        documentName = name or (override.__name__ if override
+        documentName = name or (override.__name__ if override  # type: ignore
                                 else "BaseDocument")
-        return type(documentName, (BaseDocument, ), attrs)
+        return type(documentName, (BaseDocument, ), attrs)  # type: ignore
 
     @staticmethod
-    def _schema_field(field: FIELD) -> dict:
+    def _schema_field(field: BaseField) -> dict:
         if field.inner:
             return field.sfield(field.inner, **{**{"allow_none": True},
                                                 **field.skwargs})
         return field.sfield(**{**{"allow_none": True}, **field.skwargs})
 
     @staticmethod
-    def _mongoengine_field(field: FIELD) -> dict:
+    def _mongoengine_field(field: BaseField) -> dict:
         return field.dbfield(**field.dkwargs)
 
 
@@ -193,18 +182,25 @@ class BaseResource(metaclass=Base):
 
     """
 
-    _api = None
-    _rpc = None
-    _direct = None
-    _db = None
+    _api = ApiMapper()
+    _rpc = RpcMapper()
+    _direct = DirectMapper()
+    _db: MongoMapper | MySQLMapper = MongoMapper()
     _access_mode = None
     _mode = Mode()
     _user = None
     _token = None
     _preloaded = False
-    _data = dict()
+    _uid: tuple = ()
+    _fields: Dict[str, Any] = {}
+    _data: Dict[str, Any] = {}
+    _meta: Dict[str, Any] = {}
+    dbmodel: type = Document
+    schema: type = Schema
+    _single: bool = False
 
-    def __init__(self, _preloaded: bool = False, **kwargs: dict) -> None:
+    def __init__(self, _preloaded: bool = False, _mode: str = "api",
+                 **kwargs: dict) -> None:
         """Instantiate the class.
 
         Some field can be specified as only application side. These fields
@@ -218,9 +214,9 @@ class BaseResource(metaclass=Base):
                 manually.
             # Setting to set some fields as only app side.
         """
-        self._data = dict()
+        self._data = {}
         self._find_user_or_token(**kwargs)
-        self._set_mode(kwargs.pop("_mode", "api"))
+        self._set_mode(_mode)
         self._setup_meta_data(_connector=kwargs.pop("_connector", None))
         self.keyformatter = self._get_key_formatter(**kwargs)
         self._single = self._get_single_status(**kwargs)
@@ -234,9 +230,10 @@ class BaseResource(metaclass=Base):
         self._mode = str(mode).lower()
 
     def _field_attributes(self, **fielddata: dict) -> None:
-        for field in self._fields.keys():
+        for field in self._fields:
             self._remove_field_attribute(field)
-            self._add_kwarg_data(field, **fielddata)
+            self._add_kwarg_data(field, _preloaded=self._preloaded,
+                                 **fielddata)
         setmethod = getattr(self, f"_set_{self._mode}_data")
         setmethod(**fielddata)
 
@@ -244,12 +241,12 @@ class BaseResource(metaclass=Base):
         setattr(self, field, None)
         self._data[f"__{field}"] = None
 
-    def _add_kwarg_data(self, field: str, **fielddata: dict) -> None:
+    def _add_kwarg_data(self, field: str, _preloaded: bool = False,
+                        **fielddata: dict) -> None:
         if field not in fielddata:
             return
         setattr(self, field, fielddata[field])
-        _preload = fielddata.pop("_preloaded", self._preloaded)
-        if _preload:
+        if _preloaded:
             self._data[f"__{field}"] = fielddata[field]
 
     def _find_user_or_token(self, **kwargs: dict) -> None:
@@ -257,20 +254,20 @@ class BaseResource(metaclass=Base):
         self._token = self._get_token_from_env(**kwargs)
 
     @staticmethod
-    def _get_token_from_env(**kwargs: dict) -> str:
+    def _get_token_from_env(**kwargs: dict) -> dict[Any, Any] | str | None:
         token = kwargs.get("_token", None)
-        return token if token else os.environ.get("API_TOKEN", None)
+        return token if token else os.getenv("API_TOKEN")
 
     @staticmethod
-    def _get_user_from_env(**kwargs: dict) -> dict:
-        username = os.environ.get("API_USER")
-        password = os.environ.get("API_PASS")
+    def _get_user_from_env(**kwargs: dict) -> dict | None:
+        username = os.getenv("API_USER")
+        password = os.getenv("API_PASS")
         if not username and not password:
-            return kwargs.get("_user", None)
+            return kwargs.get("_user")
         return dict(username=username, password=password)
 
     def _get_key_formatter(self, **kwargs: dict) -> dict:
-        return {k: kwargs.get(k, list()) for k in self._uid
+        return {k: kwargs.get(k, []) for k in self._uid
                 if kwargs.get(k, None) is not None}
 
     def _get_single_status(self, **kwargs: dict) -> bool:
@@ -282,7 +279,7 @@ class BaseResource(metaclass=Base):
         self._attach_direct_resources()
         self._attach_db_resources(**kwargs)
 
-    def _set_data_checks(self, field: str, **fielddata: dict) -> None:
+    def _set_data_checks(self, field: str, **fielddata: dict) -> bool:
         if not self._single:
             return False
         if not self._preloaded:
@@ -292,20 +289,20 @@ class BaseResource(metaclass=Base):
         return True
 
     def _set_api_data(self, **fielddata: dict) -> None:
-        for field in self._fields.keys():
+        for field in self._fields:
             if not self._set_data_checks(field, **fielddata):
                 continue
             if self._api.data is None:
-                self._api.data = dict()
-            self._api.data[field] = fielddata.get(field)
+                self._api.data = {}
+            self._api.data[field] = fielddata.get(field)  # type: ignore
 
     def _set_rpc_data(self, **fielddata: dict) -> None:
-        for field in self._fields.keys():
+        for field in self._fields:
             if not self._set_data_checks(field, **fielddata):
                 continue
             if self._rpc.data is None:
-                self._rpc.data = dict()
-            self._rpc.data[field] = fielddata.get(field)
+                self._rpc.data = {}
+            self._rpc.data[field] = fielddata.get(field)  # type: ignore
 
     def _set_db_data(self, **fielddata: dict) -> None:
         if self._preloaded and fielddata.get("_doc", None) is not None:
@@ -319,44 +316,44 @@ class BaseResource(metaclass=Base):
             self._db.data = fielddata
 
     def _set_direct_data(self, **fielddata: dict) -> None:
-        for field in self._fields.keys():
+        for field in self._fields:
             if not self._set_data_checks(field, **fielddata):
                 continue
             if self._direct.data is None:
-                self._direct.data = dict()
-            self._direct.data[field] = fielddata.get(field)
+                self._direct.data = {}
+            self._direct.data[field] = fielddata.get(field)  # type: ignore
 
     def _attach_api_resources(self):
-        if not self._meta.get("api", dict()):
+        if not self._meta.get("api", {}):
             return
         uid = {"uid": self._meta.get("uid", ())}
-        api = self._meta.get("api", dict())
+        api = self._meta.get("api", {})
         self._api = ApiMapper(**uid, **api)
         self._api.activeshim = api.get("shim")(
             user=self._user, token=self._token, **self._api.shimkwargs)
 
     def _attach_rpc_resources(self):
-        if not self._meta.get("rpc", dict()):
+        if not self._meta.get("rpc", {}):
             return
         uid = {"uid": self._meta.get("uid", ())}
-        rpc = self._meta.get("rpc", dict())
+        rpc = self._meta.get("rpc", {})
         self._rpc = RpcMapper(**uid, **rpc)
-        self._rpc.activeshim = self._meta.get("rpc", dict()).get("shim")(
+        self._rpc.activeshim = self._meta.get("rpc", {}).get("shim")(
             user=self._user, token=self._token, **self._rpc.shimkwargs)
 
     def _attach_direct_resources(self) -> None:
-        if not self._meta.get("direct", dict()):
+        if not self._meta.get("direct", {}):
             return
         uid = {"uid": self._meta.get("uid", ())}
-        direct = self._meta.get("direct", dict())
+        direct = self._meta.get("direct", {})
         self._direct = DirectMapper(**uid, **direct)
-        self._direct.activeshim = self._meta.get("direct", dict()).get("shim")(
+        self._direct.activeshim = self._meta.get("direct", {}).get("shim")(
             **self._direct.shimkwargs)
 
     def _attach_db_resources(self, _connector=None) -> None:
         uid = {"uid": self._meta.get("uid", ())}
-        db = self._meta.get("db", dict())
-        mysql = self._meta.get("mysql", dict())
+        db = self._meta.get("db", {})
+        mysql = self._meta.get("mysql", {})
         if not db and not mysql:
             return
         if db and not mysql:
@@ -370,61 +367,29 @@ class BaseResource(metaclass=Base):
             self._db.connector = conn
 
     # Main GET
-    def get(self, **kwargs: dict) -> (list or dict):
+    def get(self, **kwargs: dict) -> List[Any] | Dict[Any, Any] | None:
         """Run main get method."""
         return getattr(self, "_get_from_{}".format(self._mode))(**kwargs)
-
-    def get_long_query(self, queryField: str, queryFieldValue: List[str],
-                       chunkSize: int = 20, **kwargs) -> List[Dict]:
-        """Get long query.
-
-        Read the data in chunks from the `queryField`. This will stop creating
-        long url for query. Read the data in chunks and store in `self.data`.
-
-        Args:
-            queryField (str): Field on which the query should be execute
-            queryFieldValue (list): List of value to passed for `queryField`
-
-        Kwargs:
-            chunkSize (int): Size of chunk to sliced to
-        All additional kwargs are passed down to the specific get method used.
-
-        Returns:
-            list
-
-        """
-        # If mode is DB, no need to chunk the data
-        if self._mode.lower() == "db":
-            return self.get(**{queryField: queryFieldValue}, **kwargs)
-
-        chunkedData = []
-        chunkApiData = []
-        for chunkData in chunkify_list(queryFieldValue, chunkSize=chunkSize):
-            extraKwargs = {queryField: f"{','.join(chunkData)},",
-                           **kwargs}
-            chunkedData += self.get(**extraKwargs)
-            chunkApiData += self._api.data
-        self._api.data = chunkApiData
-        return chunkedData
 
     # Main SET
     def save(self, **kwargs: dict) -> None:
         """Run main save method."""
         if self._mode == "db" and self._db.db == "mysql":
-            query = self._db.template.substitute(**kwargs)
-            return self._db.connector.set_query(query)
+            query = self._db.template.substitute(**kwargs)  # type: ignore
+            return self._db.connector.set_query(query)  # type: ignore
         if not self.has_changes():
             return None
         return getattr(self, "_save_to_{}".format(self._mode))(**kwargs)
 
-    def post(self, data: dict, xtraheaders: dict = None, endpoint: str = None,
-             **kwargs: dict) -> dict:
+    def post(self, data: dict, xtraheaders: Dict[str, str] | None = None,
+             endpoint: str | None = None, **kwargs: dict) -> dict:
         """Make a post to an API."""
-        xtraheaders = xtraheaders or dict()
-        self._api.activeshim.headers = {
-            **self._api.activeshim.headers, **xtraheaders}
-        return self._api.activeshim.post(
-            endpoint=endpoint or self._api.urlpost.format(**self.keyformatter),
+        xtraheaders = xtraheaders or {}
+        self._api.activeshim.headers = {  # type: ignore
+            **self._api.activeshim.headers, **xtraheaders}  # type: ignore
+        return self._api.activeshim.post(  # type: ignore
+            endpoint=endpoint or self._api.urlpost.format(  # type: ignore
+                **self.keyformatter),
             data=self._add_embeddedkey_to_data(data), **kwargs)
 
     def bulk_mongo_save(self, data: list, chunkSize: int = 10000) -> None:
@@ -437,15 +402,15 @@ class BaseResource(metaclass=Base):
             chunkSize: what size to chunk the data into. default 10,000
 
         """
-        data = self.make_bson_data(data)
-        if data is None:
+        newData = self.make_bson_data(data)
+        if newData is None:
             raise TypeError("Data not formatted in SON data type for mongo")
-        for docs in chunkify_list(data, chunkSize=chunkSize):
-            self.dbmodel._collection.insert_many(docs)
+        for docs in chunkify_list(newData, chunkSize=chunkSize):
+            self.dbmodel._collection.insert_many(docs)  # type: ignore
 
     def query(self, query: str, many: bool = True) -> Any:
         """Run a SQL query."""
-        return self._db.connector.query(query, many=many)
+        return self._db.connector.query(query, many=many)  # type: ignore
 
     # Main DELETE
     def delete(self, **kwargs: dict) -> None:
@@ -542,24 +507,25 @@ class BaseResource(metaclass=Base):
             HandlerMethodNotImplemented: When there is no "get" method
                 implemented by connector class.
         """
-        reqKwargs = dict(responseAsJson=responseAsJson,
-                         passOnFailure=passOnFailure,
-                         timeout=timeout)
         if "get" not in self._api.methods:
             raise HandlerMethodNotImplemented(
                 "Unable to get from {}".format(self._api.activeshim.apiName))
         if not self._api.data or refresh is True or self._preloaded is False:
-            self._get_from_api_single(
-                **reqKwargs,
-                **query) if self._single else self._get_from_api_many(
-                    **reqKwargs, **query)
+            if self._single:
+                self._get_from_api_single(responseAsJson=responseAsJson,
+                                          passOnFailure=passOnFailure,
+                                          timeout=timeout, **query)
+            else:
+                self._get_from_api_many(responseAsJson=responseAsJson,
+                                        passOnFailure=passOnFailure,
+                                        timeout=timeout, **query)
         return self._render_output_data(self._api.data, _raw=_raw)
 
     def _get_from_api_single(self,
                              responseAsJson: bool = True,
                              passOnFailure: bool = True,
                              timeout: Any = None,
-                             **query) -> dict:
+                             **query) -> None:
         getkey = "single" if getattr(self._api, "urlsingle", None) else "put"
         url = getattr(self._api, "url{}".format(getkey)).format(
             **self.keyformatter)
@@ -570,18 +536,18 @@ class BaseResource(metaclass=Base):
         self._api.data = self._strip_embeddedkey_from_data(data)
         if self._api.data is not None:
             marshalledData = self.schema().load(self._api.data).data
-            for field in self._fields.keys():
+            for field in self._fields:
                 self._add_kwarg_data(field, _preloaded=True, **marshalledData)
 
     def _get_from_api_many(self,  # pylint: disable=too-many-locals
                            responseAsJson=True,
                            passOnFailure=True,
                            timeout=None,
-                           **query) -> list:
+                           **query) -> None:
         paginated = query.pop("_paginated", True)
         url = self._api.urlget.format(**self.keyformatter)
         assignedQuery, errors = self.schema().dump({
-            f: getattr(self, f) for f in self._fields.keys()
+            f: getattr(self, f) for f in self._fields
             if getattr(self, f, None) is not None})
         if errors:
             if not self._api.errors:
@@ -604,62 +570,13 @@ class BaseResource(metaclass=Base):
     # RPC (api)
 
     def _get_from_rpc(self, **query: dict) -> Any:
-        # pylint: disable=R0912
-        payload = {"endpoint": self._rpc.rpcurl, **query}
-        rpcargs = []
-        if "deviceNumber" in self._fields:
-            if not self.deviceNumber:
-                raise ValueError("Cannot get from RPC, deviceNumber must "
-                                 "be set")
-            payload['deviceNumber'] = self.deviceNumber
-        if "commcellName" in self._fields:
-            if not self.commcellName:
-                raise ValueError("Cannot get from RPC, commcellName must "
-                                 "be set")
-            payload['commcellName'] = self.commcellName
-        if self._single:
-            if getattr(self._rpc, "getid"):
-                rpcargs.append(getattr(self, self._rpc.getid))
-            self._get_from_rpc_single(*tuple(rpcargs), **payload)
-        else:
-            self._get_from_rpc_many(*tuple(rpcargs), **payload)
-        if self._rpc.task.get("success", False) is True:
-            raw = self._rpc.task.get("results", {}).get("response", None)
-            add = False
-            if "deviceNumber" in self._fields:
-                field = "deviceNumber"
-                add = True
-            if "commcellName" in self._fields:
-                field = "commcellName"
-                add = True
-            if add:
-                if isinstance(raw, dict):
-                    raw[field] = getattr(self, field)
-                elif isinstance(raw, list):
-                    raw = [{field: getattr(self, field), **d} for d in raw]
-            self._rpc.data = raw
-            if self._single:
-                if raw:
-                    for field in self._fields.keys():
-                        self._add_kwarg_data(
-                            field, _preloaded=True,
-                            **self._load_or_dump_and_load(self._rpc.data))
-        else:
-            self._rpc.errors = self._rpc.task.get("results",
-                                                  {}).get("response", None)
-        return self._render_output_data(self._rpc.data)
+        raise HandlerMethodNotImplemented
 
     def _get_from_rpc_single(self, *args, **kwargs: dict):
-        if getattr(self._rpc, "getone"):
-            if not args:
-                raise ValueError("*args must be set")
-            method = getattr(self._rpc, "getone")
-        else:
-            method = getattr(self._rpc, "getall")
-        self._rpc.task = self.run_task(method, *args, **kwargs)
+        raise HandlerMethodNotImplemented
 
     def _get_from_rpc_many(self, *args, **kwargs: dict):
-        self._rpc.task = self.run_task(self._rpc.getall, *args, **kwargs)
+        raise HandlerMethodNotImplemented
 
     # DIRECT
 
@@ -697,44 +614,47 @@ class BaseResource(metaclass=Base):
             return {**assignedQuery, **query}
         if not self._db.template:
             return query
-        return {"query": self._db.template.substitute(**query)}
+        return {"query": self._db.template.substitute(**query)}  # type: ignore
 
     @staticmethod
     def _generate_object(data):
         return type("doc", (), data)
 
-    def _query_mongo_mysql_many(self, **query: Any) -> Any:
+    def _query_mongo_mysql_many(self, **query: Any) -> List[Any]:
         if self._db.db == "mongo":
-            return self.dbmodel.objects(**query)
+            return self.dbmodel.objects(**query)  # type: ignore
         return [self._generate_object(d) for d in
-                self._db.connector.query(query['query'], many=True)]
+                self._db.connector.query(query['query'],  # type: ignore
+                                         many=True)]
 
-    def _query_mongo_mysql_single(self, **query: Any) -> Any:
+    def _query_mongo_mysql_single(self, **query: Any) -> Dict[str, Any]:
         if self._db.db == "mongo":
-            return self.dbmodel.objects(**query).first()
+            return self.dbmodel.objects(**query).first()  # type: ignore
         return self._generate_object(
-            self._db.connector.query(query['query'], many=False))
+            self._db.connector.query(query['query'],  # type: ignore
+                                     many=False))
 
-    def _get_from_db(self, refresh: bool = True, **query: dict) -> Any:
+    def _get_from_db(self, refresh: bool = True,
+                     **query: dict) -> Dict[str, Any] | List[Any]:
         qq = self._pick_mongo_mysql_query(**query)
         if not self._db.data or refresh is True or self._preloaded is False:
             self._get_from_db_single(
                 **qq) if self._single else self._get_from_db_many(**qq)
         return self._make_data()
 
-    def _get_from_db_many(self, **query) -> list:
+    def _get_from_db_many(self, **query) -> None:
         docs = self._query_mongo_mysql_many(**query)
         self._db.index = {str(d.id): d for d in docs}
         self._db.data, self._db.errors = self.schema().dump(
             self._db.index.values(), many=True)
 
-    def _get_from_db_single(self, **query) -> Document:
+    def _get_from_db_single(self, **query) -> None:
         doc = self._query_mongo_mysql_single(**query)
         if doc:
-            self._db.index = {str(doc.id): doc}
+            self._db.index = {str(doc.id): doc}  # type: ignore
             self._db.data = doc
         if doc is not None:
-            for field in self._fields.keys():
+            for field in self._fields:
                 self._add_kwarg_data(
                     field, _preloaded=True,
                     **self._load_or_dump_and_load(self._db.data))
@@ -743,15 +663,21 @@ class BaseResource(metaclass=Base):
 
     # API
 
-    def _save_to_api(self, **kwargs: dict) -> None:
-        self._save_api_single(
-            **kwargs) if self._single else self._save_api_many(**kwargs)
+    def _save_to_api(self, data: Dict[str, Any] | None = None,
+                     passOnFailure: bool = True, timeout: Any = None,
+                     **kwargs: dict) -> None:
+        if self._single:
+            self._save_api_single(data=data, passOnFailure=passOnFailure,
+                                  timeout=timeout, **kwargs)
+        else:
+            self._save_api_many(data=data, passOnFailure=passOnFailure,
+                                timeout=timeout, **kwargs)
         return self._make_data()
 
-    def _save_api_single(self, data: dict = None,
+    def _save_api_single(self, data: Dict[str, Any] | None = None,
                          passOnFailure: bool = True,
                          timeout: Any = None,
-                         **kwargs: dict) -> object:
+                         **kwargs: dict) -> None:
         """Save single object to API.
 
         First the validation is ran using marshmallow and any requirements
@@ -785,7 +711,7 @@ class BaseResource(metaclass=Base):
 
         """
         if data is None:
-            data = {k: getattr(self, k) for k in self._fields.keys()}
+            data = {k: getattr(self, k) for k in self._fields}
         validate = self._validate_save(data)
         if validate:
             raise ClientInputError(validate)
@@ -796,22 +722,21 @@ class BaseResource(metaclass=Base):
         if not savemethod:
             # No need to pass `passOnFailure`, this is just to check which
             # method to use for the api call.
-            savemethod = "put" if self._api.activeshim.get(
+            savemethod = "put" if self._api.activeshim.get(  # type: ignore
                 endpoint=geturl, timeout=timeout) else "post"
         if savemethod not in self._api.methods:
             raise HandlerMethodNotImplemented(
                 "Unable to {} to {}".format(
                     savemethod, self._api.activeshim.apiName))
         saveurl = getattr(self._api, "url{}".format(savemethod), None)
-        getattr(self._api.activeshim, savemethod)(
-            endpoint=saveurl.format(**self.keyformatter),
+        getattr(self._api.activeshim, savemethod)(  # type: ignore
+            endpoint=saveurl.format(**self.keyformatter),  # type: ignore
             data=self._add_embeddedkey_to_data(self._dump_data(data)),
             passOnFailure=passOnFailure,
             timeout=timeout)
-        self.get(passOnFailure=passOnFailure,
-                 timeout=timeout)
+        self.get(**{"passOnFailure": passOnFailure, "timeout": timeout})
 
-    def _save_api_many(self, **kwargs):
+    def _save_api_many(self, **kwargs) -> None:
         if self._single:
             raise TypeError("Save list used on single object")
         raise HandlerMethodNotImplemented
@@ -833,15 +758,16 @@ class BaseResource(metaclass=Base):
             **kwargs) if self._single else self._save_db_many(**kwargs)
         return self._make_data()
 
-    def _save_db_single(self, data: dict = None, **kwargs: dict) -> None:
+    def _save_db_single(self, data: Dict[str, Any] | None = None,
+                        **kwargs: dict) -> None:
         if data is None:
-            data = {k: getattr(self, k) for k in self._fields.keys()}
+            data = {k: getattr(self, k) for k in self._fields}
         self.get()
         if not self._db.data:
             self._db.data = self.dbmodel(**data)
         for key, value in data.items():
             setattr(self._db.data, key, value)
-        self._db.data.save()
+        self._db.data.save()  # type: ignore
         self.get()
 
     def _save_db_many(self, **kwargs: dict) -> None:
@@ -860,8 +786,8 @@ class BaseResource(metaclass=Base):
             **self.keyformatter)
         if not self._api.activeshim.get(endpoint=geturl):
             return None
-        self._api.activeshim.delete(endpoint=self._api.urldelete.format(
-            **self.keyformatter))
+        self._api.activeshim.delete(  # type: ignore
+            endpoint=self._api.urldelete.format(**self.keyformatter))
         return None
 
     def _delete_from_rpc(self, **kwargs: dict) -> None:
@@ -873,7 +799,7 @@ class BaseResource(metaclass=Base):
     def _delete_from_db(self, **kwargs: dict) -> None:
         if not self._single:
             raise TypeError("Unable to delete a list of objects")
-        self._db.data.delete()
+        self._db.data.delete()  # type: ignore
         for field in list(self._fields.keys()):
             setattr(self, field, None)
 
@@ -881,7 +807,7 @@ class BaseResource(metaclass=Base):
     def has_changes(self):
         """Return `True` if the values have changes from the last refresh."""
         return bool(any([self.field_has_change(f)
-                         for f in self._fields.keys()]))
+                         for f in self._fields]))
 
     def field_has_change(self, f):
         """Return `True` if the values have changes from the last refresh."""
@@ -889,11 +815,11 @@ class BaseResource(metaclass=Base):
 
     # Display data
 
-    def objects(self) -> list:
+    def objects(self) -> List[Any] | None:
         """Return a list of objects from the .data of the current mode."""
         if self._single is True:
             return None
-        return self._make_data() or list()
+        return self._make_data() or []
 
     def _make_data(self):
         if self._return_mode_data() is None:
@@ -918,7 +844,7 @@ class BaseResource(metaclass=Base):
         return self.schema().dump(data, many=isinstance(data, list)).data
 
     def _get_embeddedkey(self):
-        return self._meta.get("api", dict()).get("embeddedkey")
+        return self._meta.get("api", {}).get("embeddedkey")
 
     def _add_embeddedkey_to_data(self, data):
         embeddedkey = self._get_embeddedkey()
@@ -963,7 +889,7 @@ class BaseResource(metaclass=Base):
 
     def serialize_data(self):
         """Return the marshaled data or the empty type."""
-        empty = dict() if self._single else list()
+        empty = {} if self._single else []
         data = self._return_mode_data()
         if data is None:
             return empty
@@ -971,14 +897,14 @@ class BaseResource(metaclass=Base):
 
     def deserialize_data(self):
         """Return the marshaled data or the empty type."""
-        empty = dict() if self._single else list()
+        empty = {} if self._single else []
         data = self._return_mode_data()
         if data is None:
             return empty
         return data
 
     @staticmethod
-    def make_bson_data(data: Any) -> SON:
+    def make_bson_data(data: Any) -> List[SON] | SON | None:
         """Convert standard dictionary to a bson object.
 
         If the data is neither a list or dict, None is returned.
@@ -1025,7 +951,7 @@ def PaginateSchemaFactory(baseSchema, name="PaginatedSchema",
                           includeFields=None, excludeFields=None):
     """Return created Paginated classes."""
     includeFields = includeFields or None
-    excludeFields = excludeFields or list()
+    excludeFields = excludeFields or []
     value = sfields.List(
         sfields.Nested(baseSchema, only=includeFields, exclude=excludeFields),
         attribute="items", exclude=("_cls", ))

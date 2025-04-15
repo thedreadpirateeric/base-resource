@@ -4,6 +4,14 @@ from typing import Any
 from typing import Type
 from typing import List
 from typing import Dict
+from typing import Callable
+
+
+class MockAPIBase:
+    """Mock for type hinting."""
+
+    apiName: str
+    get: Callable
 
 
 class MapperObject:
@@ -17,14 +25,15 @@ class MapperObject:
 
     """
 
-    shim: dict[Any, Any] | type[Any] | None = None
-    data = None
-    errors = None
-    uid: dict[Any, Any] | list[str] | None = []
+    shim: Dict[str, Any] | type[Any] | None = None
+    data: Dict[str, Any] | List[Any] | None = None
+    errors: List[Any] | None = None
+    uid: List[str] = []
+    activeshim: MockAPIBase
     index = None
 
-    def __init__(self, _uid: dict[Any, Any] | list[str] | None = None,
-                 shim: dict[Any, Any] | type[Any] | None = None) -> None:
+    def __init__(self, _uid: List[str] | None = None,
+                 shim: Dict[str, Any] | type[Any] | None = None) -> None:
         """Instantiate the class."""
         self.shim = shim
         self.uid = _uid or []
@@ -41,7 +50,7 @@ class MapperObject:
 
     def index_data(self) -> None:
         """Create an index of the dataset in `.data` based on the 'uid'."""
-        indexData: dict | None = None
+        indexData: Dict[str, Any] | List[Any] | None = None
         indexErrors: List[str] = []
         if not self.data:
             indexErrors.append("No data to index")
@@ -114,11 +123,11 @@ class ApiMapper(MapperObject):
 
     """
 
-    urlget = None
-    urlput = None
-    urlpost = None
-    urldelete = None
-    urlsingle = None
+    urlget: str
+    urlput: str
+    urlpost: str
+    urldelete: str
+    urlsingle: str
     methods: List[str] = []
     shimkwargs: Dict[str, Any] = {}
 
@@ -150,8 +159,10 @@ class MongoMapper(MapperObject):
 
     document = None
     name: str | None = None
-    meta: Dict[str, Any] | None = {}
-    index = None
+    meta: Dict[str, Any] = {}
+    index: Dict[str, Any]  # type: ignore
+    template = None
+    db = "mongo"
 
     def __init__(self, document: Type | None = None,
                  meta: Dict[str, Any] | None = None,
@@ -172,9 +183,9 @@ class MySQLMapper(MapperObject):
     shimkwargs: Dict[str, Any] = {}
     template = None
     substitute = None
-    db = None
+    db = "mysql"
 
-    def __init__(self, **kwargs: dict) -> None:
+    def __init__(self, uid: List[Any] | None = None, **kwargs: dict) -> None:
         """Create the response object.
 
         Args:
@@ -183,7 +194,7 @@ class MySQLMapper(MapperObject):
 
         """
         super().__init__(
-            _uid=kwargs.get("uid", []), shim=kwargs.get("shim", None))
+            _uid=uid or [], shim=kwargs.get("shim", None))
         self.data = None
         self.errors = None
         self.template = kwargs.get("template", None)
@@ -201,7 +212,7 @@ class RpcMapper(MapperObject):
     task = None
     getid = None
 
-    def __init__(self, **kwargs: dict):
+    def __init__(self, uid: List[Any] | None = None, **kwargs: dict):
         """Create RPC mapper."""
         self.getall = kwargs.get("getall")
         self.getone = kwargs.get("getone")
@@ -209,7 +220,7 @@ class RpcMapper(MapperObject):
         self.shimkwargs = kwargs.get("shimkwargs", {})
         self.getid = kwargs.get("getid")
         super().__init__(
-            _uid=kwargs.get("uid", []), shim=kwargs.get("shim", None))
+            _uid=uid or [], shim=kwargs.get("shim", None))
 
 
 class DirectMapper(MapperObject):
@@ -219,14 +230,14 @@ class DirectMapper(MapperObject):
     module = None
     shimkwargs: Dict[str, Any] = {}
 
-    def __init__(self, **kwargs: dict):
+    def __init__(self, uid: List[Any] | None = None, **kwargs: dict):
         """Create RPC mapper."""
         self.method = kwargs.get("method")
         self.module = kwargs.get("module")
         self.command = kwargs.get("command")
         self.shimkwargs = kwargs.get("shimkwargs", {})
         super().__init__(
-            _uid=kwargs.get("uid", []), shim=kwargs.get("shim", None))
+            _uid=uid or [], shim=kwargs.get("shim", None))
 
 
 class ApiResponse:

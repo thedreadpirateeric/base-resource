@@ -1,7 +1,8 @@
 """General utilities."""
+from typing import Any
 
 
-def chunkify_list(largeList: list, chunkSize: int = 250) -> list:
+def chunkify_list(largeList: Any, chunkSize: int = 250) -> list:
     """Split list into smaller chunks.
 
     Args:
