@@ -41,6 +41,7 @@ htmlcov/
 .tox/
 .nox/
 .coverage
+.coverage*
 .coverage.*
 .cache
 nosetests.xml
@@ -172,6 +173,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# python-version
+.python-version
 
 # System Files
 .DS_Store
