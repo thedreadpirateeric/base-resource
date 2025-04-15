@@ -12,7 +12,7 @@ from marshmallow import ValidationError
 from mongoengine import Document
 from bson import SON
 
-from ..utils.utils import chunkify_list
+from ..utils.utils import chunkify_list, marshall_load, marshall_dump
 from ..connectors.responseobjects import (
     ApiMapper, MongoMapper, MySQLMapper, RpcMapper, DirectMapper)
 from ..errors.errors import HandlerMethodNotImplemented, ClientInputError
@@ -417,53 +417,6 @@ class BaseResource(metaclass=Base):
         """Run main delete method."""
         return getattr(self, "_delete_from_{}".format(self._mode))(**kwargs)
 
-    # Helper TASK (RPC / Automation)
-    def run_task(self, task: Any, *args: tuple, **kwargs: dict) -> Any:
-        """Initiate a long running (rpc or automation) task.
-
-        Initiate a remote proceedure call (against an infrastucture device) or
-        start an automation task (to build a report or perform a multi-step
-        process).
-
-        Args:
-            task (string): RPC / Automation Task Name.
-
-        KwArgs:
-            endppoint (string, optional, "/tasks"): Path to use to make the
-                request.
-            waitForResponse (boolean, optional, True): If True, checks back
-                on the RPC task periodically until the task ends or the check
-                limit is reached.
-            deviceNumber (integer, optional, None): Device number to run an
-                RPC task against.
-            username (string, optional, None): Name of user to override as
-                api requestor (when using INTERNAL_TOKEN).
-            commcellName (string, optional, None): Commcell name of the
-                commserver to run an RPC task against.
-
-        Returns:
-            dict: Dictionary containing details of the triggered RPC task.
-
-        """
-        endpoint = kwargs.pop("endpoint", "/tasks")
-        waitForResponse = kwargs.pop("waitForResponse", True)
-        deviceNumber = kwargs.pop("deviceNumber", None)
-        username = kwargs.pop("username", None)
-        payload = dict(
-            deviceNumber=deviceNumber,
-            args=list(args),
-            kwargs=dict(**kwargs)
-        )
-        if username:
-            payload.update({"username": username})
-        mode = getattr(self, f"_{self._mode}")
-        if mode.activeshim.apiName == "StorageCenterAPI":
-            payload['name'] = task
-        else:
-            payload['task'] = task
-        return mode.activeshim.poll_task(
-            endpoint=endpoint, data=payload, waitForResponse=waitForResponse)
-
     # GET
 
     def _render_output_data(self, output, _raw: bool = False):
@@ -535,7 +488,7 @@ class BaseResource(metaclass=Base):
                                         timeout=timeout)
         self._api.data = self._strip_embeddedkey_from_data(data)
         if self._api.data is not None:
-            marshalledData = self.schema().load(self._api.data).data
+            marshalledData, _ = marshall_load(self.schema, self._api.data)
             for field in self._fields:
                 self._add_kwarg_data(field, _preloaded=True, **marshalledData)
 
@@ -546,9 +499,9 @@ class BaseResource(metaclass=Base):
                            **query) -> None:
         paginated = query.pop("_paginated", True)
         url = self._api.urlget.format(**self.keyformatter)
-        assignedQuery, errors = self.schema().dump({
-            f: getattr(self, f) for f in self._fields
-            if getattr(self, f, None) is not None})
+        assignedQuery, errors = marshall_dump(
+            self.schema, {f: getattr(self, f) for f in self._fields
+                          if getattr(self, f, None) is not None})
         if errors:
             if not self._api.errors:
                 self._api.errors = errors
@@ -599,9 +552,9 @@ class BaseResource(metaclass=Base):
     def _pick_mongo_mysql_query(self, **query: dict) -> Any:
         if self._db.db == "mongo":
             qfields = self.keyformatter if self._single else self._fields
-            assignedQuery, errors = self.schema().dump({
-                f: getattr(self, f) for f in qfields.keys()
-                if getattr(self, f, None) is not None})
+            assignedQuery, errors = marshall_dump(
+                self.schema, {f: getattr(self, f) for f in qfields.keys()
+                              if getattr(self, f, None) is not None})
             if errors:
                 if not self._db.errors:
                     self._db.errors = errors
@@ -645,8 +598,8 @@ class BaseResource(metaclass=Base):
     def _get_from_db_many(self, **query) -> None:
         docs = self._query_mongo_mysql_many(**query)
         self._db.index = {str(d.id): d for d in docs}
-        self._db.data, self._db.errors = self.schema().dump(
-            self._db.index.values(), many=True)
+        self._db.data, self._db.errors = marshall_dump(
+            self.schema, self._db.index.values(), many=True)
 
     def _get_from_db_single(self, **query) -> None:
         doc = self._query_mongo_mysql_single(**query)
@@ -832,16 +785,20 @@ class BaseResource(metaclass=Base):
             all([isinstance(d, (BaseResource, Document)) for d in data])) \
                 or isinstance(data, (BaseResource, Document)):
             data = self._dump_data(data)
-        return self.schema().load(
-            data, many=isinstance(data, list)).data
+        validData, _ = marshall_load(self.schema, data,
+                                     many=isinstance(data, list))
+        return validData
 
     def _validate_save(self, data: Any) -> Any:
         data = self._dump_data(data)
-        return self.schema().load(
-            data, many=isinstance(data, list)).errors
+        _, errors = marshall_load(self.schema, data,
+                                  many=isinstance(data, list))
+        return errors
 
     def _dump_data(self, data: Any) -> Any:
-        return self.schema().dump(data, many=isinstance(data, list)).data
+        validData, _ = marshall_dump(self.schema, data,
+                                     many=isinstance(data, list))
+        return validData
 
     def _get_embeddedkey(self):
         return self._meta.get("api", {}).get("embeddedkey")
