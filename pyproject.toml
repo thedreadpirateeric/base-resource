@@ -22,10 +22,10 @@ license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
 dependencies = [
-  "marshmallow",
-  "requests",
-  "python-dateutil",
-  "mongoengine",
+  "marshmallow==3.26.1",
+  "requests==2.32.3",
+  "python-dateutil==2.9.0.post0",
+  "mongoengine==0.29.1",
 ]
 
 [project.urls]
