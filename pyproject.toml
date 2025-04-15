@@ -13,7 +13,7 @@ maintainers = [
 ]
 description = "Model based resources that are used to talk to APIs and Databases Directly"
 readme = "README.md"
-requires-python = ">= 3.11"
+requires-python = ">= 3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
