@@ -25,7 +25,7 @@ The reference trees are the attached archives, extracted only for this review. T
 
 **Verified:** `bslib` source is 6,466 lines across 38 Python files. `bsapilib` source is 3,206 lines across 14 Python files. `baseresourcelib` library Python is about 2,500 lines across 16 files. The whole tracked tree outside `.git`, including tests and `STYLEGUIDE.md`, is 3,461 lines.
 
-**Not verified:** no search was made for other repositories that import `baseresourcelib`. No original-library test suite was re-run. `k8ssdk.py` (929 lines) and `rest_resources.py` (1,552 lines) were classified from their public classes, headers, and identifier search, not a line-by-line reading.
+**Not verified:** no search was made for other repositories that import `baseresourcelib`. No original-library test suite was re-run. `k8ssdk.py` (929 lines) was classified from its public class, header, and identifier search. `rest_resources.py` is 1,552 lines. The task view from `BaseTaskResourceView` through `delete`, and the Celery helpers at the top of that file, were read. The rest of that module was not.
 
 ## Headline
 
@@ -35,7 +35,9 @@ The reference trees are the attached archives, extracted only for this review. T
 
 What is already in good shape: the Python 3.12 floor, Hatchling, tox 4 as the real runner, the mode/shim `BaseResource` design, and the field and exception vocabulary.
 
-What is thin or wrong: empty `setup.py` and `noxfile.py`, a one-line README, a Marshmallow contract that does not match either Marshmallow 3 or 4, generic operations removed from `BaseResource`, a timeout helper that no longer preserves floats, two employer-identifying leftovers in the public connector, and a token stub that returns the caller’s password.
+What is thin or wrong: empty `setup.py` and `noxfile.py`, a one-line README, a Marshmallow contract that does not match either Marshmallow 3 or 4, RPC get and task polling removed while the `rpc` mode and `RpcMapper` shell remain, a timeout helper that no longer preserves floats, two employer-identifying leftovers in the public connector, and a token stub that returns the caller’s password.
+
+Owner review of this assessment: task submission, the RPC mode, and task polling stay first-class generic parts of this library. Section 1.3 and PR 4 record that. Celery, the Flask task view, and the product endpoint classes stay out.
 
 ---
 
@@ -80,7 +82,7 @@ Methods present in the reference `BaseResource` and absent here:
 | --- | --- | --- |
 | `get_long_query` | (b) | Splits a long API filter into chunks. Database mode stays one query. Uses `chunkify_list`, which is still here. |
 | `aggregate`, `get_aggregate_projection_extensions` | (b) | Mongo pipeline helper plus an empty hook so subclasses can add projection fields without editing the base. |
-| `run_task` | split | The idea, "submit a task and optionally poll," is (b). The body special-cases `apiName == "StorageCenterAPI"` (`name` versus `task`) and takes `deviceNumber` and `commcellName`. Those keys are (c). Restore polling with a caller-supplied task field name. Do not copy the branch. |
+| `run_task` | (b) | Submit a named task through the active shim's `poll_task`. The generic payload is `args`, `kwargs`, optional `username`, `endpoint`, and `waitForResponse`. The `StorageCenterAPI` branch that renames the task field to `name`, and the `deviceNumber` top-level copy, are (c). See section 1.3. |
 | `_load_data` | (b) | Reference load/dump path is explicit: lists imply `many`, reads keep `ValidationError.valid_data`, writes return field errors, and dump errors of type `ValueError`, `TypeError`, and `OverflowError` are still reported as field errors. Current code folds this into `marshall_load` / `marshall_dump`, which always catch `ValidationError` and drop the error object on the read path. |
 | `_make_object_class`, `_make_object_from_class` | (a) | Inlined into `_make_object` and `_make_objects`. Same construction: dynamic subclass, copy mode, token, and MySQL connector. Not a missing feature. |
 
@@ -95,7 +97,7 @@ Methods present in the reference `BaseResource` and absent here:
 | `connectors/apibase.py` `ApiBase` | `connectors/base.py` `ApiBase` | (a), with leftovers | Request, retry, status mapping, and timeout wrapper are the same design. |
 | `ApiBase.sb_api_paginated_request` | `connectors/brlbase.py` `BRLBaseApi` | (a) | Moved and renamed. Docstring says BaseResourceLib. "BRL" is not an employer name. |
 | `set_internal_token` | `_get_internal_token_from_env` | (b) for one behavior | Reference returns no internal token when `supportInternalToken` is false, and clears the header. Current code always reads `INTERNAL_TOKEN`. |
-| `poll_task`, `_task_has_ended`, `_task_handle_poll_limit`, `_task_wait_for_response` | absent | (b) | Generic task submit-and-poll. Status names match `TASK_STATUSES` and the task exceptions. About 80 lines plus tests. |
+| `poll_task`, `_task_has_ended`, `_task_handle_poll_limit`, `_task_wait_for_response` | absent | (b) | Generic submit-and-poll on `ApiBase`. Fixed sleep, not exponential backoff. Terminal statuses do not exactly match `TASK_STATUSES`. Details in section 1.3. |
 | `connectors/responseobjects.py` | `connectors/responseobjects.py` | (a) | Same mapper classes. This repo adds `MockAPIBase` and annotations. Method sets match. Not a line-by-line behavioral audit. |
 | `connectors/storagecentermongo.py` | `connectors/mongobase.py` | (a), minus one constant | **Verified:** the only deletion is `BASE_COUNTER_META` (shard key `deviceNumber`, `component`, `componentID`, `counterTime`). That constant is (c). `BaseQuerySet` and `Pagination` match. |
 | `connectors/mongo.py` `mongo_connect` | absent | optional (b) | 25-line `mongoengine.connect` wrapper. Env names `BS_MONGO_DB_NAME` and `BS_MONGO_DB_URI` are internal. Callers can connect without this helper. Not part of the core hole. |
@@ -108,6 +110,131 @@ Methods present in the reference `BaseResource` and absent here:
 
 **Verified** live employer string, `connectors/base.py`: token exhaustion appends `"ATTN: SBDEVs have been automatically notified!"` The reference has the same sentence. It is not dead.
 
+#### 1.3 Task, RPC, and polling
+
+Owner decision, after review of this document: these three are generic library behavior and are restored. They are not product features to leave behind. The notes below separate the mechanism, which comes back, from the bindings, which do not.
+
+`SBTasksApi` and `SBRpcApi` are named by the task-dispatch note and by tests. Those service repositories were not in the attached archives. **Not verified:** their source. The bindings below are what `bslib` and `bsapilib` actually contain.
+
+##### What is already in this repo
+
+**Verified:**
+
+- `Mode` still has an `rpc` mode, and `get` / `save` / `delete` still dispatch to `_get_from_rpc`, `_save_to_rpc`, and `_delete_from_rpc`.
+- `RpcMapper` in `connectors/responseobjects.py` still stores `getall`, `getone`, `getid`, `rpcurl`, `shim`, `shimkwargs`, and `task`.
+- `TaskException` and the status exceptions (`TaskRetry`, `TaskAborted`, `TaskIncompletedWarning`, `TaskIncompletedError`, `TaskFailed`, `TaskTerminated`, `TaskCrashed`) are in `errors/errors.py`.
+- `TASK_STATUSES` is in `utils/constants.py`.
+- `_get_from_rpc`, `_get_from_rpc_single`, and `_get_from_rpc_many` raise `HandlerMethodNotImplemented`. That is the strip. In the reference, those three methods are implemented.
+- `_save_to_rpc` and `_delete_from_rpc` raise `HandlerMethodNotImplemented` here and in the reference. They were extension points, not deleted behavior. Leave them as overridable hooks.
+
+##### Generic mechanism to restore
+
+**Verified** from `bslib/connectors/apibase.py` and `bslib/handlers/basehandler.py`.
+
+`poll_task` is an HTTP client, not a broker:
+
+1. `POST` `endpoint` (default `"/tasks"`) with the caller's body. `passOnFailure` is forced off for that POST. A non-dict body, or a missing / blank / non-string `taskID`, raises `ApiRequestError`. No sleep and no follow-up GET happen in that case. The reference tests patch `post`, `get`, and `time.sleep`.
+2. If `waitForResponse` is false, return the POST body.
+3. If true, sleep 2 seconds (this pause is hardcoded, separate from the interval below), then GET `"{endpoint}/{taskID}"`. The first GET does not wait. Later GETs wait a fixed `taskCheckSleep` (default 2) and stop when `_task_has_ended` or the attempt limit is hit. There is no exponential backoff in this loop. `ApiBase.throttleBackoffFactor` is the HTTP retry backoff for status codes 429 and 502–504. It is a different mechanism. Do not merge the two.
+4. Terminal statuses in `_task_has_ended` are `finished`, `failed`, `aborted`, `crashed`, `terminated`, and `successful`. Anything else, including a missing status, is still running.
+5. Hitting the limit rewrites the task to `status="terminated"`, `results.success=False`, and a `results.response` string. It does not raise.
+
+**Verified by reading** the limit lookup, not by running it with the variables set: `poll_task` reads `TASK_POLLING_LIMIT` and `TASK_POLLING_SLEEP`, then keeps the default unless the value `isinstance(..., int)`. `os.getenv` returns a string, so a normal environment value never passes that test. The reference wait test expects `taskCheckMax=1800` and `taskCheckSleep=2`. Restore the intended knobs by parsing the strings. Do not copy the `isinstance(..., int)` check.
+
+`TASK_STATUSES` is `submitted`, `waitingretry`, `running`, `successful`, `aborted`, `incomplete`, `failed`, `terminated`, `crashed`. The poller also treats `finished` as terminal, and it does not treat `incomplete` as terminal. `incomplete` has `TaskIncompletedWarning` and `TaskIncompletedError`. **Inference:** those lists drifted. The restore should take the terminal set as an argument whose default is the poller's tuple, and keep `TASK_STATUSES` as the record vocabulary. Unifying them silently would change when a poll stops.
+
+`run_task` builds one body and calls `poll_task` on the active mode's shim:
+
+- `args` is the positional tuple as a list.
+- Remaining keywords become `kwargs`, except `endpoint` (default `"/tasks"`), `waitForResponse` (default true), `deviceNumber`, and `username`, which are popped.
+- `username`, when set, is copied to the top level.
+- `deviceNumber`, when not `None`, is copied to the top level. The value `0` is sent. `None` is omitted.
+- The task name is `payload["name"]` when `activeshim.apiName == "StorageCenterAPI"`, and `payload["task"]` otherwise. `test_run_task.py` locks that for `RPCApi`, `TasksApi`, and `StorageCenterAPI`.
+
+The generic part is the envelope `{<task field>: name, "args": [...], "kwargs": {...}}` plus optional top-level `username` and an optional caller-supplied routing value. The class-name branch is the binding. Restore `run_task` with a `taskField` argument defaulting to `"task"`. A consumer who still speaks the old key passes `taskField="name"`. The library does not mention `StorageCenterAPI`.
+
+`_get_from_rpc` is the RPC mode, and it is also generic once the routing keys are data:
+
+- The mapper supplies `rpcurl`, `getall`, `getone`, and `getid`.
+- Single-object get calls `run_task(getone or getall, id, endpoint=rpcurl, **query)`. Collection get calls `run_task(getall, ...)`.
+- On `task["success"]` true, `results.response` becomes the mode data and is loaded through the schema. Otherwise the response string is stored on `RpcMapper.errors`.
+
+The reference special-cases fields named `deviceNumber` and `commcellName`: they are required when declared, sent in the payload, and copied back onto each result row. That pair is the product binding. **Proposed:** the mapper gains an optional list of routing fields (the reference behavior is "whatever the resource declared under those two names"). A consumer sets `routingFields=("deviceNumber",)` or `("accountId",)`. Empty means "do not invent routing fields." `commcellName` in the reference `run_task` is not popped; it stays inside `kwargs`. The dispatch note says the same thing for the private APIs. Do not add a `commcellName` parameter.
+
+`TaskBaseResource` in `handlers/basedevice.py` is the task record: `taskID`, `username`, `dateAdded`, `dateEnded`, `task`, `status` defaulting to `"submitted"`, `success` defaulting to false, `results`, `queue`, `kwargs`, plus `deviceNumber`. Concrete classes `TaskResource`, `AutoTaskResource`, `DataCollTaskResource`, `RpcResource`, and `AutoTaskLogResource` bind `StorageCenterAPI` and paths such as `/rpc/tasks`, `/automation/tasks`, and `/datacollections/tasks`. Their `model_default` callables use `datetime.utcnow()`.
+
+**Proposed:** add `TaskRecord(BaseResource)` under `src/baseresourcelib/bases/task.py` with the generic fields only. No `deviceNumber`, no default URL, no shim. A consumer subclasses it, adds their own fields, and sets `_meta["api"]` to their shim and paths. Status defaults stay `"submitted"` and `False`. Timestamp defaults wait for an explicit naive-UTC decision. Do not copy `utcnow()` in just to match the old model.
+
+##### Product bindings that stay out
+
+| Piece | Where | Why it is not the generic mechanism |
+| --- | --- | --- |
+| `apiName == "StorageCenterAPI"` | `run_task` | Chooses JSON key `name` instead of `task`. |
+| `deviceNumber` / `commcellName` required by name | `_get_from_rpc`, `TaskBaseResource`, `BaseTaskResourceView.fetch_data_from_request` | Routing identity for that platform. A truthy device is also prepended to Celery `args`. |
+| `AutoTaskResource`, `DataCollTaskResource`, `RpcResource`, `AutoTaskLogResource` | `basedevice.py` | Shim and URL bindings. |
+| `BaseTaskResourceView` | `bsapilib/rest_resources.py` | Flask view. Looks up a task definition, accepts key `task` or `name`, checks `ldapRoles` plus `storagecenter_automation`, and publishes to Celery. GET/PUT rehydrate `TaskResults` rows. |
+| `add_celery_task`, `BSCelerySchema`, `_celery_payload` | `bsapilib/utils.py`, `rest_resources.py` | Prefixes names with `app.` unless they start with `bscelery` or `app`. One queue name is `bscelery_appsearch_tasks_queue`. |
+| `celery_factory`, `CeleryConfig` | `bsapilib/connectors/rabbitmq.py` | Publisher. The default broker URL embeds a username, a password, and a vhost. Do not copy that URL into this repo. |
+| `TaskDispatchError` | `bsapilib/errors.py` | Flask `ServiceUnavailable` for that publisher. |
+
+The task-dispatch note describes the private server contract: POST returns 201 without waiting, the document is saved before publish, and the same UUID is Celery's `task_id`. That is the server. This library's job is the client: submit, poll, and read the RPC mode. A Flask or Celery extra is still a later product, and it is not required to make task, RPC, and polling real.
+
+##### Proposed shape
+
+**Proposed**, not implemented:
+
+| Piece | Where | Role |
+| --- | --- | --- |
+| `poll_task` and the three helpers | `src/baseresourcelib/connectors/base.py` on `ApiBase` | HTTP submit and poll. Override `_task_has_ended` or pass `terminalStatuses`, `maxChecks`, and `intervalSeconds`. |
+| `run_task` | `src/baseresourcelib/bases/base.py` on `BaseResource` | Build the envelope and call the active shim. `taskField` defaults to `"task"`. |
+| `RpcMapper` | already in `connectors/responseobjects.py` | Consumer config: `shim`, `rpcurl`, `getall`, `getone`, `getid`, and optional `routingFields`. |
+| `_get_from_rpc` and the single/many helpers | `bases/base.py` | Use the mapper. Apply `results.response` through the schema load path from PR 3. |
+| `TaskRecord` | `src/baseresourcelib/bases/task.py` | Generic task document and schema. No endpoint. |
+| `TASK_STATUSES` | `utils/constants.py` | Documented vocabulary. The poller's default terminal set stays separate and is tested. |
+
+A consumer plugs in endpoints without editing the library:
+
+```python
+class Job(TaskRecord):
+    _meta = {
+        "uid": ("taskID",),
+        "api": {
+            "shim": MyApi,
+            "urlget": "/jobs",
+            "urlpost": "/jobs",
+            "urlsingle": "/jobs/{taskID}",
+        },
+    }
+
+class Widget(BaseResource):
+    _meta = {
+        "rpc": {
+            "shim": MyApi,
+            "rpcurl": "/jobs",
+            "getall": "widgets.list",
+            "getone": "widgets.get",
+            "getid": "widgetId",
+            "routingFields": ("widgetId",),
+        }
+    }
+```
+
+`MyApi` is their `ApiBase` subclass. Its `baseURL` is their host. `job.run_task("widgets.refresh", widget_id, taskField="task", endpoint="/jobs")` posts the envelope. `widget.get()` in rpc mode calls `run_task` with the mapper's method names. Nothing in the library names their service.
+
+##### How to test without a service
+
+Port the reference tests. They already mock the transport.
+
+- `test_task_has_ended.py`: missing status is not terminal.
+- `test_task_handle_poll_limit.py`: limit result is `terminated` with `results.success` false.
+- `test_task_wait_for_response.py`: patch `get` and `sleep`. Assert the GET URL is `"{endpoint}/{taskID}"` and that `sleep` is the fixed interval.
+- `test_poll_task.py`: patch `post`. A bad `taskID` raises `ApiRequestError` and does not sleep. `waitForResponse=False` does not poll. `passOnFailure=True` still fails the POST.
+- `test_run_task.py`: patch `poll_task`. Assert the envelope uses `taskField` and does not add `deviceNumber` unless the caller passed a routing value. No API class name in the assertion.
+- One `TaskRecord` test builds the schema from the class and dumps a dict. No MongoDB.
+- One rpc-mode test uses a `SimpleNamespace` shim, as `test_run_task.py` does, and checks that `getone` receives the configured id.
+
+Do not start Flask, Celery, RabbitMQ, or a socket. The reference poll tests import `ApiBase()` and therefore need `API_TOKEN`, which tox already sets.
+
 #### Fields, errors, utilities
 
 | Reference | This repo | Tag | Notes |
@@ -117,7 +244,7 @@ Methods present in the reference `BaseResource` and absent here:
 | `PreferenceFetchError`, `BSIdentityException` | absent | (c) | Only meaningful with preferences and the identity client. |
 | `constants.py` | `utils/constants.py` | (a) | **Verified:** files are identical. No hostnames. |
 | `TIMEZONE_OFFSETS` | present, unreferenced | optional | Reference uses it only from `average_by_keys`. Nothing in this repo imports the module. **Verified** by search. |
-| `TASK_STATUSES` | present, unreferenced | (d) as a binding | Defined in both trees and referenced by no Python file in either tree. The words themselves still match the task exceptions. Do not delete it in a drive-by; use it or drop it when polling is restored. |
+| `TASK_STATUSES` | present, unreferenced | (b) when polling returns | Defined in both trees and referenced by no Python file in either tree. It is the status vocabulary for a task record. The poller uses a different terminal set. Keep the constant and pass an explicit terminal set into the poller. Do not pretend the two lists are the same. |
 | `chunkify_list`, `string_to_float_or_int` | `utils/utils.py` | (a) and (b) | `chunkify_list` matches. `string_to_float_or_int` was rewritten. |
 | `marshall_load`, `marshall_dump` | only here | (a) for now | Small wrappers. The reference inlined the stricter policy on `BaseResource` instead. Keep them only if they still match the restored policy. |
 | `average_by_keys`, `bucketize_list`, `convert_bytes`, `convert_megabytes`, `convert_gigabytes`, `inject_qry_param`, `make_uuid`, `make_truthy_falsy`, `string_to_list` | absent | optional (b) | Generic helpers with unit tests in the reference. None of them are required for `BaseResource` to function. Restore a helper when a caller in this repo needs it. Do not paste the module back to increase coverage. |
@@ -143,7 +270,8 @@ All (c) unless noted. Do not restore them into the core package.
 
 | Module | Public types | Why it stays out |
 | --- | --- | --- |
-| `handlers/basedevice.py` | Device, tag, account, snapshot, and task resources | StorageCenter document model. `storagecenterSnapshotType` and `StorageCenterAPI` are hard-wired. |
+| `handlers/basedevice.py` device, tag, account, and snapshot classes | StorageCenter document model | `storagecenterSnapshotType` and `StorageCenterAPI` are hard-wired. Stay out. |
+| `handlers/basedevice.py` `TaskBaseResource` and the concrete task classes | task record plus product URLs | The generic fields are restored as `TaskRecord` (section 1.3). The classes that bind `/rpc/tasks` and the other product paths stay out. |
 | `handlers/preferences.py` | `Preference`, `StoragePreference`, `BackupPreference`, `fetch_preferences` | Product preference catalogs. |
 | `handlers/passwordsafe.py`, `handlers/passwords.py` | Projects, credentials, service-account passwords | Internal credential store. Replace the idea with a provider interface. |
 | `handlers/userinfo.py` | `UserInformation` | Identity user resource. |
@@ -162,7 +290,7 @@ All (c) unless noted. Do not restore them into the core package.
 | Module | Tag | Notes |
 | --- | --- | --- |
 | `application.py` | (c) | Flask factory, CORS, rate limit, request log. Env prefix `BSAPI_`. Useful pattern, not a file to copy. |
-| `rest_resources.py` | (c) | CRUD views, pagination, and task publication. Coupled to Celery ingest and snapshot fields such as `storagecenterSnapshotType`. Redesign later if a generic view extra is actually needed. |
+| `rest_resources.py` | (c) for the Flask and Celery view | `BaseTaskResourceView` was read (from the class through `delete`). It is the private server: login, LDAP roles, definition lookup, and Celery publish. The client-side task and poll behavior is restored from `bslib` instead. The rest of this 1,552-line module was not read line by line. |
 | `login.py` | (c) | Rackspace Identity URL default, Redis session, and role names `storagecenter_developers`, `storagecenter_techs`, `storagecenter_automation`, `storagecenter_admins`, `backupcenter_admins`. Account constant `storageautomation`. |
 | `connectors/rabbitmq.py`, `redisclient.py` | (c) | Broker and session client for that API. |
 | `connectors/database.py` | (c) | Second `mongo_connect`, with the library's env names. |
@@ -185,7 +313,7 @@ The 21 tests are the five `get` API-path tests, seven `Mode` tests, and nine `Ap
 | `tests/unit/bases/base/test_mode_class.py` | only here | (a) |
 | `test_marshmallow4.py`, `handlers/test_schema_contract.py`, `fields/test_defaults_contract.py` | absent | (b) with the schema restore |
 | `test_get_long_query.py`, `test_aggregate.py`, `test_make_data.py`, `test_pipelinejobs.py` | absent | (b) with those methods |
-| `test_run_task.py` and the four `poll_task` / task-wait tests | absent | (b), rewritten so they do not encode `StorageCenterAPI` |
+| `test_run_task.py` and the four `poll_task` / task-wait tests | absent | (b) | Already mock HTTP. Port them. Drop the `StorageCenterAPI` / `deviceNumber` cases or replace them with a caller-supplied task field name. |
 | `test_decorators.py`, the `string_to_float_or_int` cases in `test_utils.py` | absent | (b) with the helper fix |
 | Rest of `test_utils.py` | absent | optional, only if that helper returns |
 | `test_backupcenterapi.py`, `test_storagecenterapi.py`, `test_identity.py`, `test_passwordsafe.py`, `test_dcxgatewayapi.py`, `test_k8ssdk.py` | absent | (c) |
@@ -279,18 +407,19 @@ The code mixes `list | None` and `typing.List`. On 3.12 both are valid. A sweep 
 Keep:
 
 - One resource metaclass, four modes (`api`, `rpc`, `db`, `direct`), shim mappers, and the field types that build both a Marshmallow schema and a MongoEngine document.
-- `BaseResourceException` and the status exceptions. The rename away from `BSException` is the generalization and should stay.
-- `ApiBase` as the HTTP mechanism, with authentication plugged in through `_attach_identity_provider`.
+- `BaseResourceException`, including the task status exceptions.
+- `ApiBase` as the HTTP mechanism, including `poll_task` once PR 4 restores it, with authentication plugged in through `_attach_identity_provider`.
 - `BRLBaseApi` as the paginated client. It is already the generic form of `sb_api_paginated_request`.
+- `run_task`, the RPC mapper, and `TaskRecord`, as the generic task and RPC surface. Endpoints and task-name keys are consumer configuration.
 
 Change, once, before calling the API stable:
 
 - Generated schemas should follow the reference contract: unknown fields excluded, legacy `missing` / `default` / `load_from` accepted, boolean-returning validators still rejecting values, reads keeping valid fields, writes returning field errors.
-- Task polling should not know the string `StorageCenterAPI`.
+- `run_task` takes `taskField` (default `"task"`). It does not branch on an API class name.
 - Token refresh should fail clearly when no provider is attached. It should not echo a password.
 - Re-export exceptions from `baseresourcelib.errors` so callers do not import `errors.errors`.
 
-Do not add, as part of modernization: a Flask layer, a CLI, product connectors, or a credential implementation. A credential provider, if added, is a protocol with `get_secret(key) -> str` (names up to the implementer) and no network default. Password Safe, Identity, and MySQL-via-vault stay outside the repository.
+Do not add, as part of modernization: a Flask layer, a Celery publisher, a CLI, product connectors, or a credential implementation. A credential provider, if added, is a protocol with `get_secret(key) -> str` (names up to the implementer) and no network default. Password Safe, Identity, and MySQL-via-vault stay outside the repository.
 
 `STYLEGUIDE.md` is a Google-style sample, including example functions. It is documentation, not a module that tests import. Leave it. The camelCase field values are the public data contract (`totalItems`, `hasNext`, `per_page`). Keep them.
 
@@ -300,7 +429,8 @@ Do not add, as part of modernization: a Flask layer, a CLI, product connectors, 
 | --- | --- |
 | Marshmallow 3.26.1 plus `.data` and `missing=` | Python >=3.12 |
 | Schema unknown-field and default behavior behind the reference | Hatchling and a static version |
-| `get_long_query`, aggregate, and task poll removed | tox 4, pytest, flake8, pylint |
+| RPC get and `poll_task` removed; `rpc` mode is only a stub | tox 4, pytest, flake8, pylint |
+| `get_long_query` and aggregate removed | `RpcMapper` and the task exception classes, which are already here |
 | `string_to_float_or_int` float contract | Google docstrings and camelCase variables |
 | Empty `setup.py` and `noxfile.py` | `ApiBase` retry loop and status map |
 | Lint gate red on four f-strings | `C0103` disabled, because the style guide requires camelCase |
@@ -341,7 +471,7 @@ Do not copy these. Where a behavior is worth having, reimplement it without the 
 | People | both `AUTHORS` files | Names, corporate emails, and `*.local` hostnames. Not reproduced here. |
 | Hosts and URLs | `bslib` docs `api-reference.md` and `getting-started.md`, connector defaults, `bsapilib` README and `login.py` | `identity-internal.api.rackspacecloud.com`, `staging.identity-internal.api.rackspacecloud.com`, `api.storage.rackspace.com`, `mbuapi.storage.rackspace.com`, `api.identity.rackspace.corp`, `passwordsafe.corp.rackspace.com`, `api.dcx.rackspace.com`, `ssltool.rackspace.com` |
 | Tickets | `ChangeLog`, `dockersdk.py`, `bsapilib/utils.py` | Prefix `SBDEV-`, host `rackspace.atlassian.net` |
-| Product systems | handlers, connectors, login roles, `run_task` | StorageCenter, BackupCenter, MBU / `MbuAPI`, DCX Gateway, the internal Password Safe deployment, role names `storagecenter_*` and `backupcenter_admins`, account `storageautomation` |
+| Product systems | handlers, connectors, login roles, the `StorageCenterAPI` branch inside `run_task` | StorageCenter, BackupCenter, MBU / `MbuAPI`, DCX Gateway, the internal Password Safe deployment, role names `storagecenter_*` and `backupcenter_admins`, account `storageautomation`. The task client itself is generic and is restored. |
 | Internal defaults | `dockersdk.py`, `k8ssdk.py` docstring | Docker network `sbdevs_default`, example namespace `storagecenter` |
 | Release process | `PYTHON312.md`, `AGENTS.md` | Jira as the version authority, private Git install URLs for `bslib`, `taskslib`, and `bsnotify` |
 
@@ -362,7 +492,7 @@ Do not copy these. Where a behavior is worth having, reimplement it without the 
 
 Each step is one PR. Later steps assume the earlier behavior is in place. Do not start step 3 by deleting the mode/shim design.
 
-The order is: stop publishing internal names, repair a helper the HTTP layer already calls, restore the schema contract that the reference already proved, put back the generic resource operations, then make the existing gates tell the truth. Documentation of the public API comes after the API stops moving.
+The order is: stop publishing internal names, repair the timeout helper the HTTP layer already calls, restore the schema contract, then restore task submission, RPC get, and polling on top of that contract. Chunked GET and aggregation follow. Packaging and the README come after the API stops moving. Task, RPC, and polling are not optional and are not delayed until a Flask extra exists.
 
 ### PR 1. Scrub the public connector
 
@@ -398,21 +528,37 @@ Port `test_marshmallow4.py`, `test_defaults_contract.py`, and `test_schema_contr
 
 **Verify.** The three ported modules pass on the installed sdist (`tox -e 3.12`). Importing `bases/base.py` no longer emits `RemovedInMarshmallow4Warning`. One test loads an unknown field and asserts it is dropped. One test calls `serialize_data` on a small preloaded resource and asserts a dict. Do not claim the private 133-test run was reproduced.
 
-### PR 4. Put back the generic resource operations
+### PR 4. Restore generic task submission, RPC get, and polling
 
-**Change.** Restore `get_long_query`. Restore `poll_task` and its three helpers on `ApiBase`. Restore `aggregate`, `PipelineJobs`, and `get_aggregate_projection_extensions`. Add a task-name field argument with a default, and do not special-case an API class name. Do not add `deviceNumber` or `commcellName` parameters.
+**Change.** This is the owner-requested restore from section 1.3. It comes after PR 3 because RPC results and `TaskRecord` go through the schema load path. It does not wait on aggregation or on any server framework.
 
-Port the unit tests that match those methods. Rewrite `test_run_task.py` if a public `run_task` is added; it should assert the configured field name, not `StorageCenterAPI`.
+On `ApiBase`, add `poll_task`, `_task_has_ended`, `_task_handle_poll_limit`, and `_task_wait_for_response`. Parse `TASK_POLLING_LIMIT` and `TASK_POLLING_SLEEP` as integers. Keep the fixed interval. Accept `terminalStatuses`, `maxChecks`, and `intervalSeconds` so a consumer can override them. Default the terminal set to the reference poller tuple.
 
-**Why.** These are framework methods. Chunked GET and aggregation are mode-aware. Polling is connector-level and is what a task method needs. They are the main "the strip went too far" gap that is not the schema work.
+On `BaseResource`, add `run_task` with `taskField="task"`. Restore `_get_from_rpc`, `_get_from_rpc_single`, and `_get_from_rpc_many` against `RpcMapper`. Add optional `routingFields` on the mapper. Do not special-case a class name, `deviceNumber`, or `commcellName`.
 
-**Tradeoff.** `PipelineJobs` is another public class. Export it from a clear module and mention it in the README in PR 6. Leave it out if the owner does not want Mongo aggregation in the core; in that case do not restore `aggregate` either. The hook alone is pointless.
+Add `TaskRecord` in `src/baseresourcelib/bases/task.py` with the generic fields only, and export it from the package when PR 7 freezes the surface. Leave `_save_to_rpc` and `_delete_from_rpc` as the `HandlerMethodNotImplemented` hooks they already are in both trees.
 
-**Verify.** Ported tests pass under tox. A grep of the PR diff finds none of the hosts or product names in section 3.2.
+Port the mocked poll tests and a rewritten `test_run_task.py`. Add the schema-only `TaskRecord` test and the rpc-mode test from section 1.3. No network, Flask, Celery, or RabbitMQ.
 
-### PR 5. Make packaging match the gates
+**Why.** The `rpc` mode, mapper, status exceptions, and `TASK_STATUSES` are already public surface, and the behavior behind them was stubbed. Polling is how a task client knows the work finished. Doing it after the schema PR means the result load uses `valid_data` and `load_default` instead of the Marshmallow 3 path PR 3 deletes.
 
-**Change.** Delete empty `setup.py` and `noxfile.py`. Convert the four `brlbase.py` `%` formats to f-strings so pylint's configured check passes, or fix the `request` signature at the same time if PR 4 did not. Drop `type` and `3.13` from the default `env_list`. Keep the `type` env in the file for an explicit `tox -e type`. Keep the static version. Do not add hatch-vcs, Nox, Ruff, or a lockfile. Add GitHub Actions only for `tox -e 3.12` and `tox -e lint` after both are green.
+**Tradeoff.** Callers must pass `taskField="name"` if their server uses that key. The old `StorageCenterAPI` branch will not exist. `incomplete` stays non-terminal under the default poller, matching the reference poller and not `TASK_STATUSES`. The env-var parse is a behavior fix relative to the reference source: string values will start to work. Document that in the PR.
+
+**Verify.** `tox -e 3.12` passes the existing 21 tests plus the ported poll and `run_task` tests. A test sets `TASK_POLLING_SLEEP=5` and asserts the wait helper is called with interval 5. A test proves `sleep` is not called when the POST body has no `taskID`. Grep the diff for `StorageCenter`, `deviceNumber`, `commcellName`, `celery`, `amqp`, and `rackspace`. None of those strings are added.
+
+### PR 5. Put back chunked GET and aggregation
+
+**Change.** Restore `get_long_query`, `aggregate`, `PipelineJobs`, and `get_aggregate_projection_extensions`. Port their unit tests.
+
+**Why.** These are the other generic `BaseResource` methods the strip removed. They do not depend on tasks. They were split out of the old combined PR so the task restore can be reviewed on its own.
+
+**Tradeoff.** `PipelineJobs` is another public class. Export it in PR 7. Skip this whole PR if Mongo aggregation is out of scope. That skip does not change PR 4.
+
+**Verify.** Ported tests pass under `tox -e 3.12`. The diff adds no host or product name from section 3.2.
+
+### PR 6. Make packaging match the gates
+
+**Change.** Delete empty `setup.py` and `noxfile.py`. Convert the four `brlbase.py` `%` formats to f-strings so pylint's configured check passes. Drop `type` and `3.13` from the default `env_list`. Keep the `type` env in the file for an explicit `tox -e type`. Keep the static version. Do not add hatch-vcs, Nox, Ruff, or a lockfile. Add GitHub Actions only for `tox -e 3.12` and `tox -e lint` after both are green.
 
 **Why.** The empty files advertise tools that are not used. The lint gate already fails for a reason that is not a design question. mypy's 15 errors are not the modernization.
 
@@ -420,30 +566,31 @@ Port the unit tests that match those methods. Rewrite `test_run_task.py` if a pu
 
 **Verify.** `tox -e 3.12` and `tox -e lint` both exit 0. `tox -e type` is allowed to fail and the PR description says so. `git grep` shows no `setup.py` and no `noxfile.py`. Build an sdist the way tox already does and install it.
 
-### PR 6. Freeze the import surface and replace the README
+### PR 7. Freeze the import surface and replace the README
 
-**Change.** Re-export the exception classes from `baseresourcelib.errors`. Export `PipelineJobs` only if PR 4 added it. Replace the one-line README with install, the Python floor, the four modes, and a pointer at the tests that define the schema contract. Update `AGENTS.md` commands if a gate changed.
+**Change.** Re-export the exception classes from `baseresourcelib.errors`. Export `TaskRecord`. Export `PipelineJobs` only if PR 5 added it. Replace the one-line README with install, the Python floor, the four modes, and a short task example: subclass `TaskRecord` or set `RpcMapper` fields, pass your shim and paths, call `run_task` or `get`. Point at the mocked tests. Update `AGENTS.md` commands if a gate changed.
 
-**Why.** After PR 3 and PR 4 the public surface is knowable. Writing the README first would document APIs that those PRs change.
+**Why.** After PR 3, PR 4, and PR 5 the public surface is knowable. Writing the README first would document APIs that those PRs change.
 
 **Tradeoff.** Re-exports are a commitment. Do it once, at 0.1.0, together with the Marshmallow break if these PRs ship as a series. They can also be separate review units and one version bump at the end.
 
-**Verify.** A fresh venv installs the sdist, imports `baseresourcelib.errors.TokenExpiredError`, and the README's install command is the command that was just run. No internal URL in the README.
+**Verify.** A fresh venv installs the sdist, imports `baseresourcelib.errors.TaskFailed` and `baseresourcelib.TaskRecord`, and the README's install command is the command that was just run. No internal URL in the README.
 
 ### Explicitly not scheduled
 
-- Copying domain handlers, identity, Password Safe, MySQL-via-vault, Docker, Kubernetes, New Relic, or `bsapilib`.
+- Copying domain handlers, identity, Password Safe, MySQL-via-vault, Docker, Kubernetes, New Relic, or the `bsapilib` Flask and Celery stack. `BaseTaskResourceView` and `celery_factory` are server bindings, not the task client.
 - A credential-provider implementation. PR 1 only removes the password echo. A protocol can wait until a second backend exists. An interface with one fake implementation is not useful yet.
 - `mongo_connect`, byte-size helpers, and `average_by_keys`, until a caller in this repo needs them.
-- A Flask extra. Revisit only if the owner wants a second package. Design it from the mode/shim API. Do not start from `rest_resources.py`.
+- A Flask extra. Revisit only if the owner wants a second package. Design it from `TaskRecord` and `poll_task`. Do not start from `rest_resources.py` or the broker URL.
 - hatch-vcs, Jira versions, Nox, Ruff, Black, snake_case fields, a pymongo `<4.18` cap, and a `datetime.utcnow` sweep.
 - Strict mypy as a default gate.
 
 ### What would falsify this plan
 
 - A downstream importer of `0.0.3` that needs `missing=` to reject unknown fields, or that depends on `.data`. The bump then needs a migration note, and 0.1.0 is still the right place, but the exclusion change must be called out in the README.
-- A decision that Mongo aggregation is out of scope. Skip `PipelineJobs` and `aggregate` in PR 4. The rest of PR 4 still stands.
+- A decision that Mongo aggregation is out of scope. Skip PR 5. PR 4 still stands.
 - A decision to keep supporting an internal API that really does want `QOperationFailed502` for one client name. The current branch cannot express that, because 502 never reaches it. It would be a new, tested mapping, not a restoration of the dead branch.
+- Evidence that RPC save or delete had a real body in a tree newer than the attached archive. In the attached `basehandler.py` both methods only raise `HandlerMethodNotImplemented`. This plan leaves them as hooks.
 
 ---
 

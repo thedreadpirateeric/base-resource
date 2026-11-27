@@ -1,6 +1,6 @@
 # base-resource
 
-Public, MIT-licensed Python library. Package name `baseresourcelib`. It is a generalized resource framework: one metaclass, modes, shims, Marshmallow schemas, and MongoEngine documents. It is not a product client and not a Flask application.
+Public, MIT-licensed Python library. Package name `baseresourcelib`. It is a generalized resource framework: one metaclass, modes (`api`, `rpc`, `db`, `direct`), shims, Marshmallow schemas, and MongoEngine documents. Task submission, the RPC mode, and task polling are part of that framework. It is not a product client, a Flask application, or a Celery broker.
 
 This file is the working guide for people and coding assistants. `docs/modernization-assessment.md` is the inventory and the planned sequence. Both are evidence of what was true when they were written. The source and the tests are the behavior.
 
@@ -12,7 +12,7 @@ Treat this guide, `STYLEGUIDE.md`, `README.md`, and the assessment as evidence. 
 
 Separate what you verified from what you inferred. A file you did not open is not a finding. A command you did not run is not a result. If the environment cannot run a check, say that, and do not weaken the check to hide the gap.
 
-Prefer the smallest change that preserves the existing design. Modes and shims, field classes that build both a schema and a document, and `BaseResourceException` are the architecture. Extend those. Do not replace them with a second resource stack, a Flask layer, or a new directory layout.
+Prefer the smallest change that preserves the existing design. Modes and shims, field classes that build both a schema and a document, `BaseResourceException`, and the task / RPC / poll path are the architecture. Extend those. A consumer supplies the shim, the endpoint paths, and the task-name field. The library does not name a product API, and it does not grow a Flask or Celery publisher to make polling work. Do not replace this with a second resource stack or a new directory layout.
 
 Work in small steps. The assessment's PR sequence is the default order for modernization. Skip a step when a later look shows it is unnecessary, and say why. Do not start a later step by rewriting an earlier one.
 
@@ -30,14 +30,14 @@ Jira is not the version source here. The version is the static `version` in `pyp
 
 ## Repository map
 
-- `src/baseresourcelib/bases/base.py` is `Mode`, the metaclass, `BaseResource`, and pagination schemas.
-- `src/baseresourcelib/connectors/base.py` is `ApiBase`.
+- `src/baseresourcelib/bases/base.py` is `Mode`, the metaclass, `BaseResource`, and pagination schemas. RPC get currently raises `HandlerMethodNotImplemented`. The assessment's PR 4 restores it, plus `run_task`.
+- `src/baseresourcelib/connectors/base.py` is `ApiBase`. `poll_task` is not here yet. PR 4 puts it on this class.
 - `src/baseresourcelib/connectors/brlbase.py` is the paginated client `BRLBaseApi`.
 - `src/baseresourcelib/connectors/mongobase.py` is the MongoEngine queryset and pagination helper.
-- `src/baseresourcelib/connectors/responseobjects.py` is the mode mappers and `ApiResponse`.
+- `src/baseresourcelib/connectors/responseobjects.py` is the mode mappers and `ApiResponse`. `RpcMapper` already holds `getall`, `getone`, `getid`, and `rpcurl`.
 - `src/baseresourcelib/fields/fields.py` is the dual schema and document fields.
-- `src/baseresourcelib/errors/errors.py` is the exception hierarchy. The package `__init__` does not re-export it yet.
-- `src/baseresourcelib/utils/` holds timeout parsing, chunking, and marshal helpers.
+- `src/baseresourcelib/errors/errors.py` is the exception hierarchy, including the task status exceptions. The package `__init__` does not re-export it yet.
+- `src/baseresourcelib/utils/` holds timeout parsing, chunking, and marshal helpers. `utils/constants.py` holds `TASK_STATUSES`. Nothing in the package reads that list yet.
 - `tests/unit/` is the suite tox runs.
 - `docs/modernization-assessment.md` records what was compared and what to do next.
 
