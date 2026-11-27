@@ -492,7 +492,7 @@ Do not copy these. Where a behavior is worth having, reimplement it without the 
 
 Each step is one PR. Later steps assume the earlier behavior is in place. Do not start step 3 by deleting the mode/shim design.
 
-The order is: stop publishing internal names, repair the timeout helper the HTTP layer already calls, restore the schema contract, then restore task submission, RPC get, and polling on top of that contract. Chunked GET and aggregation follow. Packaging and the README come after the client API stops moving. The Flask companion (section 6) starts only after that client surface exists. It is a second distribution in this repository, not a reason to delay PR 4, and not a module inside `baseresourcelib`.
+The order is: stop publishing internal names, repair the timeout helper the HTTP layer already calls, restore the schema contract, then restore task submission, RPC get, and polling on top of that contract. Chunked GET and aggregation follow. Packaging and the README come after the client API stops moving. The HTTP companion (section 6) starts only after that client surface exists. It is a second distribution whose core does not import a web framework. A Flask adapter ships with that core. OpenAPI and a FastAPI adapter follow. None of that delays PR 4, and none of it is a module inside `baseresourcelib`.
 
 ### PR 1. Scrub the public connector
 
@@ -576,22 +576,44 @@ Port the mocked poll tests and a rewritten `test_run_task.py`. Add the schema-on
 
 **Verify.** A fresh venv installs the sdist, imports `baseresourcelib.errors.TaskFailed` and `baseresourcelib.TaskRecord`, and the README's install command is the command that was just run. No internal URL in the README.
 
-### PR 8. Second distribution for the HTTP companion
+### PR 8. HTTP core and one Flask adapter
 
-**Change.** After PR 7, add the layout in section 6.3: `api/pyproject.toml` and `api/src/baseresourceapi/`, depending on `baseresourcelib` and not imported by it. First slice is the app factory, health check, endpoint registration, and `ResourceView` get/post/put/delete with pagination and validation, tested with mongomock and a fake publisher. No Identity client, no Celery, no snapshot fields, no `taskslib`.
+**Change.** After PR 7, add the layout in section 6.3. `baseresourceapi` depends on `baseresourcelib` and does not import Flask in its base modules. `ResourceService` takes a `Call` and returns a `Result` or raises `HttpError`, for get, post, put, delete, and save-then-publisher. A Flask extra mounts the registry and translates `HttpError`. Tests of behavior pass a dict. One Flask-client test checks status codes. No Identity client, no Celery, no snapshot fields, no `taskslib`, no FastAPI.
 
-**Why.** The private API library is the server half of the same resource contract. Its own defaults note says HTTP and query policy stay out of the resource library. A second distribution keeps that boundary and still lets one pull request change both sides.
+**Why.** The private view is Flask all the way through, which is why a second framework cannot call it. The seam in section 6.6 is the smallest shape that keeps Marshmallow in charge and leaves room for OpenAPI and another adapter. Flask is the first adapter because the verified server is sync and the contract tests are Flask. FastAPI's native models would be a second schema.
 
-**Tradeoff.** This is a new public package with Flask, MongoEngine, and Marshmallow. It waits until the client package can be installed, so the view is not written against the broken `.data` path. Shipping it in the same pull request as PR 3 would mix the schema break with a new framework.
+**Tradeoff.** The first HTTP pull request does not include FastAPI or a generated spec. Callers who wanted FastAPI immediately get a core they can mount, not a finished FastAPI app. Writing the core against Flask types to go faster would make PR 10 a rewrite.
 
-**Verify.** From a clean venv, install the client sdist, then the API package. `tox -e py` in `api/` passes without a network service. `baseresourcelib` does not import `baseresourceapi`. The API tree has none of the hosts or role names in section 3.
+**Verify.** From a clean venv, install the client sdist, then `baseresourceapi` with no extra, and import `ResourceService` without Flask installed. Then install the Flask extra and run the one client test. `baseresourcelib` does not import `baseresourceapi`. The API tree has none of the hosts or role names in section 3. A grep of `api/src/baseresourceapi/*.py` excluding `ext/` finds no `flask` import.
+
+### PR 9. OpenAPI from the registry
+
+**Change.** Add a function that walks the registry and writes an OpenAPI 3 document. Use apispec's Marshmallow plugin for components if it covers the field types this package actually registers. Paths, methods, and pagination query parameters come from the registry. Serve the same document from the Flask adapter. One test registers a `TaskRecord` and asserts the path and the component. No running server.
+
+**Why.** Section 6.7. The document was deferred so PR 8 stays small, and the registry was required so this PR does not have to scrape Flask routes.
+
+**Tradeoff.** apispec can miss a custom field. The test is the check. If the plugin does not earn its dependency, emit the components from the small set of field types `TaskRecord` and the pagination schema use, and say so. Do not generate the spec from Pydantic.
+
+**Verify.** The test passes with the base install. Flask is not required to build the document. The spec contains no product path from section 3.
+
+### PR 10. FastAPI adapter
+
+**Change.** Optional extra `baseresourceapi[fastapi]`. Sync `def` routes only. The route calls the same `ResourceService`. Marshmallow still loads and dumps. The OpenAPI route returns the PR 9 document. Do not declare a Pydantic body model as the source of truth.
+
+**Why.** A second adapter is justified once the core tests exist. It is not justified as a schema migration.
+
+**Tradeoff.** FastAPI will also show its own generated schema for anything the route type-hints. Keep route bodies untyped, or typed as dict, so two documents do not disagree. Operators who want FastAPI's generated models have to leave this design. That is the honest limit.
+
+**Verify.** The extra's test posts a payload and gets the same status the core test got. Uninstall Flask and confirm this extra still runs. An `async def` route is not part of the package.
 
 ### Explicitly not scheduled
 
-- Copying domain handlers, identity, Password Safe, MySQL-via-vault, Docker, Kubernetes, New Relic, or the private Celery, RabbitMQ, and Identity modules. `celery_factory` and `login.py` are not the companion's first slice. PR 8 builds the HTTP half. It does not vendor the broker.
+- Copying domain handlers, identity, Password Safe, MySQL-via-vault, Docker, Kubernetes, New Relic, or the private Celery, RabbitMQ, and Identity modules. `celery_factory` and `login.py` are not the companion's first slice. PR 8 builds the HTTP core and a Flask adapter. It does not vendor the broker.
 - A credential-provider implementation. PR 1 only removes the password echo. A protocol can wait until a second backend exists. An interface with one fake implementation is not useful yet.
 - `mongo_connect`, byte-size helpers, and `average_by_keys`, until a caller in this repo needs them.
-- Putting Flask inside `baseresourcelib`, or opening a second repository before the client 0.1 surface exists. Section 6 records why.
+- Putting a web framework inside `baseresourcelib`, or opening a second repository before the client 0.1 surface exists. Section 6 records why.
+- Adopting FastAPI by rewriting resource schemas as Pydantic models. Section 6.5 records why.
+- Shipping Flask and FastAPI adapters in the same pull request as the first `ResourceService`.
 - hatch-vcs, Jira versions, Nox, Ruff, Black, snake_case fields, a pymongo `<4.18` cap, and a `datetime.utcnow` sweep.
 - Strict mypy as a default gate.
 
@@ -690,7 +712,7 @@ Same tags as section 1. "Restore" here means "carry into the public companion," 
 
 ### 6.3 Same repository or a separate one
 
-**Recommendation:** one repository, two distributions. The HTTP code lives under `api/` and imports `baseresourcelib`. `baseresourcelib` does not import it. This is not a submodule of the client package, and it is not a second GitHub repository for the first public version.
+**Recommendation:** one repository, two distributions. The HTTP core lives under `api/` and imports `baseresourcelib`. `baseresourcelib` does not import it. Web frameworks are adapters on that core, not the core. This is not a submodule of the client package, and it is not a second GitHub repository for the first public version. Sections 6.6 through 6.8 are the framework, adapter, and OpenAPI decisions.
 
 Why that shape:
 
@@ -709,20 +731,20 @@ Why that shape:
 **Proposed** layout for this repository:
 
 ```text
-pyproject.toml                      # distribution baseresourcelib
-src/baseresourcelib/                # client, modes, poll, no Flask
+pyproject.toml                         # distribution baseresourcelib
+src/baseresourcelib/                   # client, modes, poll, no web framework
 tests/unit/
-api/pyproject.toml                  # distribution baseresourceapi
+api/pyproject.toml                     # distribution baseresourceapi
 api/src/baseresourceapi/
-    __init__.py                     # get_app_and_api, add_api_endpoint
-    views.py                        # ResourceView
-    marshal.py                      # model_build_obj isolation
-    tasks.py                        # save, then call a publisher
-api/tests/unit/
+    service.py                         # Call, Result, HttpError, ResourceService
+    marshal.py                         # model_build_obj isolation
+    registry.py                        # path template, methods, schema classes
+api/src/baseresourceapi/ext/flask.py   # extra baseresourceapi[flask]
+api/tests/unit/                        # core tests take Call and return Result
 api/tox.ini
 ```
 
-A publisher is a callable the application passes in, `(envelope) -> id`. The first tests use a list. Celery, if anyone still wants it, is an application, not this package.
+`[project.optional-dependencies] flask` and, later, `fastapi` install one adapter each. The base install imports neither. A publisher is a callable the application passes in, `(envelope) -> id`. The first tests use a list. Celery stays an application, not this package. A FastAPI adapter is a later extra, not a second core.
 
 **Proposed** layout if a second repository is chosen later:
 
@@ -746,27 +768,101 @@ What is dated or bound to the private platform:
 | Marshmallow 4 gaps at the HTTP boundary | Six strict xfails in `test_defaults_contract.py` | Fix them in the client field adapter (PR 3), then delete the xfails here if the API test still applies. Do not patch them only in the view. |
 | `datetime.utcnow` | Stdlib audit lists `application.py`, `login.py`, `rest_resources.py`, `redisclient.py` | The audit's rule stands: do not swap in aware datetimes without a test of the existing naive contract. The first slice can avoid new `utcnow()` calls. A sweep of the private modules is not a reason to copy them. |
 | PyMongo `>=4.17,<4.18` | `PYTHON312.md`: MongoDB 4.2.12 | Do not copy the cap unless the public package still claims that server. |
-| Flask-RESTful `>=0.3.10,<0.4` | `pyproject.toml` | The attached code is written against it. Replacing the view framework was not evaluated. Keep it for the first port. A later replacement is a rewrite, not this modernization. |
+| Flask-RESTful `>=0.3.10,<0.4` | `pyproject.toml` | The attached views subclass it and call `abort`. Section 6.6 does not keep Flask-RESTful as the architecture. A thin Flask adapter can use Flask itself. |
 | Elasticsearch 7 extra | `pyproject.toml` comment | Leave it out. Tag (d). |
 | Private git requirements and hatch-vcs / Jira tags | `pyproject.toml`, `PYTHON312.md` | Same decision as the client. Static versions. Public index. No git URL. |
 | Identity TLS and a private CA | `PYTHON312.md` | Stays with the identity client that is not ported. The companion's auth hook does not open that URL. |
 | Module-level `taskslib` import | `rest_resources.py` line 33 | The public view must import without `taskslib`. Result storage is a parameter. |
 
-`gunicorn`, `blinker`, `flask-cors`, and `Flask-Limiter` are current enough to keep when the factory is ported. Redis is optional at runtime because the limiter already falls back. Do not add a broker client to the install requires.
+Flask extras (`gunicorn`, `blinker`, `flask-cors`, `Flask-Limiter`) stay in the Flask extra, not in the base install. Redis stays optional. Do not add a broker client to the install requires.
 
-This assessment did not run `pip index` and did not install the Flask stack.
+This assessment did not run `pip index`, did not install Flask or FastAPI, and did not generate an OpenAPI document.
 
-### 6.5 Where it sits in the plan
+### 6.5 Frameworks
 
-PR 8 in section 4 is the first HTTP slice. It starts after PR 7 so the client package installs, the schema contract is the Marshmallow 4 one, and `run_task` / `poll_task` exist for the view tests to target.
+**Verified** coupling, from the attached source. `BaseResourceView` subclasses `flask_restful.Resource`. Errors leave through `flask_restful.abort`. Bodies and query strings come from `flask.request`. Timing and the user name live on `flask.g`. `get_urlfomatter` turns path keys named `deviceNumber` and `name` into Flask converter syntax (`<int:deviceNumber>`). `add_api_endpoint` calls `Api.add_resource`. The contract tests drive a Flask test client. MongoEngine calls in the view are ordinary synchronous method calls. The client's `poll_task` is also synchronous: `requests` plus `time.sleep`. The server POST returns 201 and does not poll.
 
-Order inside that later work, each still its own review:
+Nothing in either tree imports Pydantic, FastAPI, Starlette, Litestar, or apispec.
 
-1. Factory, health check, registration, and CRUD view. Tests from `test_application_factory.py` and the non-task, non-snapshot parts of `test_rest_resource_contract.py`, rewritten onto `baseresourceapi` and mongomock.
-2. Marshal helper and the GET/PUT default rules from the defaults note. Reuse the client's pagination schema.
-3. Task view as save-then-call-publisher, with a fake publisher. Assert the row remains when the publisher raises, and that GET returns the stored response. Do not port `login.py` or `rabbitmq.py` to make this pass.
+**Inference** from that shape, not from running another framework:
 
-The client PRs 1 through 7 do not gain a Flask dependency while this waits. If the HTTP package is rejected, those PRs are unchanged.
+| | Flask, as a thin adapter | FastAPI as the core |
+| --- | --- | --- |
+| Schema fit | The resource contract is Marshmallow. Flask does not require a second model. The view calls `schema.load` itself. | FastAPI builds request bodies, responses, and OpenAPI from Pydantic models and type hints. A Marshmallow `Schema` is not one of those models. |
+| What you keep | Validation, `unknown = EXCLUDE`, `load_from`, partial query loads, and `valid_data` stay in one place. The six xfails stay owned by the client adapter. | Those rules stay correct only if the endpoint still calls Marshmallow. FastAPI will not apply them. A parallel Pydantic model will drift. |
+| Bridge cost | No bridge. | Either hand-maintain a second model per resource, or generate Pydantic from the field classes. Generation has to preserve exclusion, aliases, partial reads, and dump-only pagination fields. That is a new compiler. This assessment did not find that compiler in the attached trees and did not try a third-party one. |
+| Async | The current code is sync. A Flask adapter stays sync. | FastAPI runs a plain `def` endpoint in a threadpool, which is the compatible way to call MongoEngine and a sync publisher. An `async def` endpoint that calls MongoEngine blocks the event loop. MongoEngine's connection handling is thread-local and synchronous. Replacing it with an async driver is a new data layer, not a port. |
+| Task and poll | Unchanged. The server returns after save and publish. The client polls with blocking HTTP. Neither side needs an event loop. | Same, if the endpoint is sync. Making the server async does not remove the client's sleep loop, and the server does not run that loop. |
+| Tests | The behavior tests can call `ResourceService` with a dict. A few tests use Flask's client to prove query strings and status codes. The large Flask contract module is evidence, not a file to keep importing Flask-RESTful. | The same core tests. Adapter tests use Starlette's test client. There is no existing FastAPI suite to port. |
+| Ecosystem | Flask-RESTful is what the private code subclasses. It is the old skin. A new adapter should be a Flask blueprint, not a `Resource` subclass. Rate limiting and CORS already exist as Flask extensions. | FastAPI's win is typed OpenAPI. That win is Pydantic-shaped. Using FastAPI only as a router, while Marshmallow does the real validation, means writing OpenAPI by hand or with a second tool. |
 
-**Not verified:** no public importer of `bsapilib` was searched. No statement here says the private package can be published as-is under the MIT license. The employer strings in section 3 apply to every file this section marks (c).
+Starlette is the toolkit FastAPI sits on. Using it directly means writing routing, request parsing, and OpenAPI yourself. That is a third framework with neither Flask's existing tests nor FastAPI's schema generation. Litestar is another typed application framework. Its native models are not Marshmallow schemas. It does not remove the bridge problem. Neither is a better fit for this contract than the two above.
+
+**Recommendation:** do not retarget the resource contract onto Pydantic so that FastAPI feels native. Do not make FastAPI the only server. Keep Marshmallow as the schema. Put HTTP behavior in a sync core. Ship a Flask adapter first, because that is the verified behavior and the existing tests. Add a FastAPI adapter later, as an extra, with sync endpoints, Marshmallow still doing load and dump, and OpenAPI coming from the registry in section 6.7 rather than from Pydantic.
+
+### 6.6 A framework-neutral core
+
+The owner wants the web framework to stay separate: one CRUD implementation, thin adapters. That is feasible for the behavior worth keeping. It is not free, and it is not "wrap `BaseResourceView`."
+
+**Verified:** the private view mixes the two. `abort` is the error path. `request.json`, `request.args`, and `g.username` are read inside the methods that also insert Mongo documents. A search of `rest_resources.py` shows those Flask calls in the class, not in one edge module. Porting is a rewrite of the control flow into return values. Subclassing `Resource` and hoping a second framework can call the same methods will not work.
+
+**Proposed** seam. The core package imports Marshmallow, MongoEngine, and `baseresourcelib`. It does not import Flask or FastAPI.
+
+```text
+Call(method, path, query, body, actor)
+Result(status, body)
+HttpError(status, body)          # raised by the service, not abort()
+
+ResourceService.get/post/put/delete(call) -> Result
+Registry entry: path template, methods, schema, page schema, document class
+```
+
+- Request and response: the adapter builds a `Call` from its framework request and turns a `Result` or `HttpError` into that framework's response. Query strings and JSON bodies are plain dicts by the time the service sees them.
+- Routing: the registry holds the path template and the methods. Each adapter has one function, `mount(app, registry)`, that registers those routes. Flask converters and FastAPI path types are the adapter's problem. The core stores `"/jobs/{taskID}"`, not `"<int:deviceNumber>"`. The private `get_urlfomatter` hardcodes `deviceNumber` and `name`. That function is not the registry.
+- Dependencies: the service is constructed with the document class, the schema, a clock, and an optional publisher. Adapters do not grow a second injection system. Auth is the adapter filling `Call.actor`. The service checks that an actor is present when the registration says auth is required. It does not read headers.
+- Errors: the service raises `HttpError(400, messages)` or returns `Result(404, ...)`. The private map is the one to keep: validation 400, missing 404, duplicate 409, empty batch 400. The adapter translates `HttpError` once.
+
+What the first core actually includes: marshal without building a document, GET with pagination and a missing record, POST of one object or a list, PUT that leaves omitted model fields alone, DELETE of one record, and save-then-publisher for a task. Snapshot filters, the aggregator route, search-field diffs, and Celery envelopes stay out.
+
+What it costs: the behavior tests move off the Flask client and onto `Call`. That is the point. Each adapter then needs a short test that a query string and a JSON body arrive intact and that an `HttpError` becomes the framework status. Two full contract suites would erase the savings. Maintaining two adapters also means two dependency sets and two ways to register a path. That cost is small next to a second schema stack. It is large if both adapters land in the first pull request.
+
+**Recommendation:** do the seam now, in the minimal form above, with one adapter. Do the second adapter later, after the core tests are the contract. Do not skip the seam and special-case Flask, and do not build Flask plus FastAPI before a single GET and POST work. "Not at all" would bake `abort` and `flask.g` back in, which is how the private view became unmovable.
+
+### 6.7 OpenAPI
+
+OpenAPI can wait. The registry above is what keeps it possible.
+
+**Inference**, not a generated document:
+
+| Source | Fit |
+| --- | --- |
+| apispec with its Marshmallow plugin | Turns a `Schema` into OpenAPI components, including nested fields. It does not know the URL map. Pair it with the registry for paths, methods, and the pagination query parameters. The output is a dict. No server has to start. |
+| FastAPI's generator | Accurate for Pydantic models the endpoint declares. Incomplete or wrong for a body that Marshmallow then re-validates, unless the Pydantic model is the real schema. Section 6.5 rejects that split. |
+| A builder over the registry | Walks path template, methods, schema, and page schema and emits an OpenAPI 3 document. apispec can do the component half so field types are not reimplemented. This is the cross-adapter option. Both adapters serve the same `openapi.json`. |
+
+Flask-RESTful does not produce this document. The private library has no spec in the attached tree.
+
+Design rules so a later generator is not blocked:
+
+- The registry keeps the schema class, the page schema, the path template, and the methods as data.
+- Path parameters are names in the template, not framework converter objects.
+- Success and error bodies are the `Result` and `HttpError` shapes, which are plain JSON.
+- Adapters do not wrap the schema so tightly that a generator has to import Flask to see it.
+
+Generate the document in a later pull request, with one test that a `TaskRecord` registration produces a path and a component. Serve it from whichever adapter exists. Do not block PR 8 on it.
+
+### 6.8 Where it sits in the plan
+
+PR 8 is the core service plus a Flask adapter. It starts after PR 7 so the client package installs, the schema contract is the Marshmallow 4 one, and `run_task` / `poll_task` exist for the task tests to target. PR 9 adds the OpenAPI document from the registry. PR 10 adds the FastAPI extra. PR 10 is optional and does not gate the client or the Flask adapter.
+
+Inside PR 8, still one review:
+
+1. `Call`, `Result`, `HttpError`, and `ResourceService` for get and post, tested with dicts and mongomock.
+2. The marshal helper and the GET/PUT default rules. Reuse the client's pagination schema.
+3. A Flask blueprint that mounts one registry entry and maps `HttpError`. One test through the Flask client is enough.
+4. Task save-then-publisher with a fake publisher. The row remains when the publisher raises. No `login.py` and no `rabbitmq.py`.
+
+The client PRs 1 through 7 do not gain a web-framework dependency. If the HTTP package is rejected, those PRs are unchanged.
+
+**Not verified:** no public importer of `bsapilib` was searched. No statement here says the private package can be published as-is under the MIT license. The employer strings in section 3 apply to every file this section marks (c). FastAPI, Starlette, Litestar, and apispec were not installed.
 

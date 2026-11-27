@@ -1,6 +1,6 @@
 # base-resource
 
-Public, MIT-licensed Python library. Package name `baseresourcelib`. It is a generalized resource framework: one metaclass, modes (`api`, `rpc`, `db`, `direct`), shims, Marshmallow schemas, and MongoEngine documents. Task submission, the RPC mode, and task polling are part of that framework. It is not a product client and it is not a Celery broker. The Flask HTTP companion is a later second distribution in this repository (`baseresourceapi`, section 6 of the assessment). It is not a module inside `baseresourcelib`.
+Public, MIT-licensed Python library. Package name `baseresourcelib`. It is a generalized resource framework: one metaclass, modes (`api`, `rpc`, `db`, `direct`), shims, Marshmallow schemas, and MongoEngine documents. Task submission, the RPC mode, and task polling are part of that framework. It is not a product client and it is not a Celery broker. The HTTP companion is a later second distribution in this repository (`baseresourceapi`, section 6 of the assessment). Its core does not import a web framework. A Flask adapter is the first adapter. A FastAPI adapter is optional and later. It is not a module inside `baseresourcelib`, and resource schemas stay Marshmallow.
 
 This file is the working guide for people and coding assistants. `docs/modernization-assessment.md` is the inventory and the planned sequence. Both are evidence of what was true when they were written. The source and the tests are the behavior.
 
