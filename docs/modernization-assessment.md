@@ -37,7 +37,7 @@ What is already in good shape: the Python 3.12 floor, Hatchling, tox 4 as the re
 
 What is thin or wrong: empty `setup.py` and `noxfile.py`, a one-line README, a Marshmallow contract that does not match either Marshmallow 3 or 4, RPC get and task polling removed while the `rpc` mode and `RpcMapper` shell remain, a timeout helper that no longer preserves floats, two employer-identifying leftovers in the public connector, and a token stub that returns the caller’s password.
 
-Owner review of this assessment: task submission, the RPC mode, and task polling stay first-class generic parts of this library. Section 1.3 and PR 4 record that. Celery, the Flask task view, and the product endpoint classes stay out.
+Owner review of this assessment: task submission, the RPC mode, and task polling stay first-class generic parts of this library. Section 1.3 and PR 4 record that. Celery and the product endpoint classes stay out of the client. The Flask library is not discarded. Section 6 treats it as the server companion, in a second package, after the client contract exists.
 
 ---
 
@@ -298,7 +298,7 @@ All (c) unless noted. Do not restore them into the core package.
 | `deco_utils.py`, `resources.py` `HealthCheckView`, `apilivenesscheck.py` | not a core restore | Small and partly generic, and useless without the Flask app. Do not add Flask to recover a health check. |
 | `utils.py` | (c) | Celery publish, event-retention days, and a comment referencing ticket `SBDEV-2987`. Pagination helpers duplicate what `BaseResource` already has. |
 
-**Inference:** a public "base resource" library is the resource/mode/connector layer. A Flask framework is a second product. The compatibility notes describe a real, tested API contract for the private platform. Copying it would copy the platform.
+**Inference, superseded by section 6:** the first pass of this assessment treated the Flask library as a product to leave out. The owner asked for it as a companion that belongs with this work. The table above is the module sketch. Section 6 is the recommendation. Copying the file tree unchanged would still copy the platform.
 
 #### Tests
 
@@ -392,7 +392,7 @@ There is no GitHub Actions workflow in this repo. **Inference:** add CI after `3
 | python-dateutil | `==2.9.0.post0` | `>=2.9.0.post0,<3` | Same generation. Fine. |
 | pymongo | not direct | `>=4.17.0,<4.18` | The upper bound is documented as MongoDB 4.2 compatibility. That is an operational constraint of the private platform. Do not copy it unless this library still has to talk to MongoDB 4.2. |
 | mysqlclient, docker, kubernetes, google-auth, click | absent | present | Only needed by modules tagged (c) or the dead CLI. Leave them out. |
-| Flask, Celery, Redis, gunicorn, marshmallow-mongoengine | absent | `bsapilib` | Leave them out of the core package. |
+| Flask, Celery, Redis, gunicorn, marshmallow-mongoengine | absent | `bsapilib` | Leave them out of `baseresourcelib`. Flask, Redis, and marshmallow-mongoengine belong to the companion in section 6. Celery stays out of both. |
 
 The Marshmallow 4 compatibility note (tested 2026-10-27, Python 3.12.14) says a bridge probe of marshmallow 4.3.1, marshmallow-mongoengine 0.31.2, mongoengine 0.29.3, and pymongo 4.17.0 had **9 passed**. It also says that probe does not make application code which uses Marshmallow 2 result objects compatible with version 4. This repo is that second case: `serialize_data` uses `.data`, and pagination uses `missing`.
 
@@ -492,7 +492,7 @@ Do not copy these. Where a behavior is worth having, reimplement it without the 
 
 Each step is one PR. Later steps assume the earlier behavior is in place. Do not start step 3 by deleting the mode/shim design.
 
-The order is: stop publishing internal names, repair the timeout helper the HTTP layer already calls, restore the schema contract, then restore task submission, RPC get, and polling on top of that contract. Chunked GET and aggregation follow. Packaging and the README come after the API stops moving. Task, RPC, and polling are not optional and are not delayed until a Flask extra exists.
+The order is: stop publishing internal names, repair the timeout helper the HTTP layer already calls, restore the schema contract, then restore task submission, RPC get, and polling on top of that contract. Chunked GET and aggregation follow. Packaging and the README come after the client API stops moving. The Flask companion (section 6) starts only after that client surface exists. It is a second distribution in this repository, not a reason to delay PR 4, and not a module inside `baseresourcelib`.
 
 ### PR 1. Scrub the public connector
 
@@ -576,12 +576,22 @@ Port the mocked poll tests and a rewritten `test_run_task.py`. Add the schema-on
 
 **Verify.** A fresh venv installs the sdist, imports `baseresourcelib.errors.TaskFailed` and `baseresourcelib.TaskRecord`, and the README's install command is the command that was just run. No internal URL in the README.
 
+### PR 8. Second distribution for the HTTP companion
+
+**Change.** After PR 7, add the layout in section 6.3: `api/pyproject.toml` and `api/src/baseresourceapi/`, depending on `baseresourcelib` and not imported by it. First slice is the app factory, health check, endpoint registration, and `ResourceView` get/post/put/delete with pagination and validation, tested with mongomock and a fake publisher. No Identity client, no Celery, no snapshot fields, no `taskslib`.
+
+**Why.** The private API library is the server half of the same resource contract. Its own defaults note says HTTP and query policy stay out of the resource library. A second distribution keeps that boundary and still lets one pull request change both sides.
+
+**Tradeoff.** This is a new public package with Flask, MongoEngine, and Marshmallow. It waits until the client package can be installed, so the view is not written against the broken `.data` path. Shipping it in the same pull request as PR 3 would mix the schema break with a new framework.
+
+**Verify.** From a clean venv, install the client sdist, then the API package. `tox -e py` in `api/` passes without a network service. `baseresourcelib` does not import `baseresourceapi`. The API tree has none of the hosts or role names in section 3.
+
 ### Explicitly not scheduled
 
-- Copying domain handlers, identity, Password Safe, MySQL-via-vault, Docker, Kubernetes, New Relic, or the `bsapilib` Flask and Celery stack. `BaseTaskResourceView` and `celery_factory` are server bindings, not the task client.
+- Copying domain handlers, identity, Password Safe, MySQL-via-vault, Docker, Kubernetes, New Relic, or the private Celery, RabbitMQ, and Identity modules. `celery_factory` and `login.py` are not the companion's first slice. PR 8 builds the HTTP half. It does not vendor the broker.
 - A credential-provider implementation. PR 1 only removes the password echo. A protocol can wait until a second backend exists. An interface with one fake implementation is not useful yet.
 - `mongo_connect`, byte-size helpers, and `average_by_keys`, until a caller in this repo needs them.
-- A Flask extra. Revisit only if the owner wants a second package. Design it from `TaskRecord` and `poll_task`. Do not start from `rest_resources.py` or the broker URL.
+- Putting Flask inside `baseresourcelib`, or opening a second repository before the client 0.1 surface exists. Section 6 records why.
 - hatch-vcs, Jira versions, Nox, Ruff, Black, snake_case fields, a pymongo `<4.18` cap, and a `datetime.utcnow` sweep.
 - Strict mypy as a default gate.
 
@@ -591,6 +601,7 @@ Port the mocked poll tests and a rewritten `test_run_task.py`. Add the schema-on
 - A decision that Mongo aggregation is out of scope. Skip PR 5. PR 4 still stands.
 - A decision to keep supporting an internal API that really does want `QOperationFailed502` for one client name. The current branch cannot express that, because 502 never reaches it. It would be a new, tested mapping, not a restoration of the dead branch.
 - Evidence that RPC save or delete had a real body in a tree newer than the attached archive. In the attached `basehandler.py` both methods only raise `HandlerMethodNotImplemented`. This plan leaves them as hooks.
+- A decision that the HTTP library must version and release on its own calendar from the first public tag. Use a second repository then. The dependency direction does not change. Section 6.3 is the layout either way.
 
 ---
 
@@ -610,3 +621,152 @@ Environment: Linux, CPython 3.12.3, venv under `/tmp`, tox 4. Packages installed
 **Not run:** `tox -e 3.13`, Nox, the reference libraries' suites, Docker image builds, and any network call to a real API. `pip index` was not queried.
 
 Generated `.tox/`, `.coverage`, and `coverage.xml` are gitignored. They are not part of the documentation change.
+
+The `bsapilib` unit suite was not installed or run. Section 6 cites that library's own docs for its reported counts.
+
+---
+
+## 6. The HTTP companion (`bsapilib`)
+
+The first sections are the client library (`bslib` to `baseresourcelib`). `bsapilib` is the server that sits on that client. The owner describes the pair as working together, and asked whether the public form is a second package in this repository or a second repository. This section answers that. It does not copy the private tree into either place.
+
+### 6.1 What it provides, and how the two are used together
+
+**Verified** from the attached `bsapilib` sources and docs.
+
+`bsapilib` is a Flask-RESTful layer. `get_app_and_api` builds a Flask app, a rate limiter, CORS, request timing signals, and a `/healthcheck` route. `add_api_endpoint` registers a view class. `BaseResourceView` implements GET, POST, PUT, and DELETE over a MongoEngine document and a Marshmallow schema: pagination, distinct queries, validation failures as HTTP 400, duplicate keys as 409, and an optional post-save publish step. `BaseTaskResourceView` saves a task document before publication and, on GET, puts stored result rows back on `results.response`. `deco_utils.schema_without_model_build` stops a Marshmallow-MongoEngine schema from constructing a document during parse, so a query or a PUT body does not invent model defaults.
+
+The dependency runs one way. `rest_resources.py` imports `bslib.schema.Schema`, `bslib.errors.NothingFound404`, `bslib.errors.DuplicateRecord409`, `bslib.utils.make_uuid`, and `bslib.config.search_fields.SEARCH_FIELDS`. `errors.py` subclasses `bslib.errors.BSException`. `utils.py` imports `bslib.schema` and three `bslib.utils` helpers. A search of `bslib` source found no import of `bsapilib`.
+
+`pyproject.toml` also requires `taskslib` and `bsnotify` by private git URL. `rest_resources.py` imports `taskslib.resources.TaskResults` at module level, so the view module does not import without that package. A search of `bsapilib` source found no use of `bsnotify`. It is a declared dependency with no caller in this tree.
+
+The defaults note draws the line the code follows. Field aliases, `model_default`, and schema generation belong to the resource library, because API, RPC, and direct callers share them. GET filter parsing, "do not build a Mongo document while reading a payload," and HTTP status mapping belong to the API library. It says a global default change in the resource library would not fix the HTTP behavior, and it says not to move HTTP policy into the resource library. StorageCenter's own helpers bypass the shared view. That bypass is named as follow-through for the private app, not as a reason to merge the two libraries.
+
+The pair at runtime, **inferred** from those pieces:
+
+1. A service subclasses the view, passes a document class and a schema built from the resource library's fields, and registers the paths with `add_api_endpoint`.
+2. POST validates, saves, and may publish. The task view's contract is: the row exists before the broker call, and a publish failure stays on the row as `results.response`. POST returns 201, not the worker's result.
+3. A caller using `BaseResource.run_task` or `poll_task` POSTs the envelope and GETs `{endpoint}/{taskID}` until the status is terminal. The server that stored the row is this library. The client that waits is the other one.
+
+That is the fit. The client does not embed Flask. The server does not reimplement field defaults. The six expected failures in `test_defaults_contract.py` are labeled as core and Marshmallow 4 gaps that reach the API boundary. The test's docstring says the API wrappers do not repair them. The xfail reasons are: core default overrides `model_default`, Marshmallow 4 rejects `required` with a load default, renaming `default` drops the Mongo fallback, load defaults skip conversion, dump defaults serialize differently from Marshmallow 2, and load defaults skip validation. **Verified** by reading the marks. The suite was not run here.
+
+Reported suite sizes, from the attached docs, **not re-run**:
+
+| Document | Claim |
+| --- | --- |
+| Compatibility note, 2026-10-27 | 25 passed, including the app factory and fakeredis limiter tests |
+| `docs/defaults-contract.md` | 108 passed, six expected failures |
+| `docs/rest-resource-contract.md` | Full tox on Python 3.12.16: 219 passed, six expected failures. An earlier battery is described as 237 passed and six expected failures. Pylint 10.00/10 |
+
+The counts differ because the docs describe different points in the work. This assessment does not pick one as the current upstream total.
+
+The contract doc shows how the authors already test the pair: `PYTHONPATH=src:../sbdevs-bsLib/src` and `tox --skip-pkg-install`. Authentication and the broker are mocked. mongomock stands in for MongoDB. That is the usage pattern to keep.
+
+### 6.2 Generic, employer-specific, and dead
+
+Same tags as section 1. "Restore" here means "carry into the public companion," not "merge into `baseresourcelib`."
+
+| Piece | Tag | Why |
+| --- | --- | --- |
+| `get_app_and_api`, `/healthcheck`, CORS from an env list, request timing | (b) | Generic Flask assembly. The required env name today is `BSAPI_APP`. Rename the prefix when porting. Default CORS origins in the factory are localhost ports. |
+| `create_limiter` | (b) | Redis storage when `BSAPI_REDIS_URI` answers, otherwise in-process memory. Tests cover that fallback. The default limit string `"200 per second"` can stay overridable. |
+| `add_api_endpoint`, `add_aggregator` | (b) | Register a view and, when the class asks, a POST `.../aggregator` route. |
+| `BaseResourceView` get/post/put/delete, pagination, distinct, 400/409 mapping | (b) | The HTTP contract. Depends on the resource library's schema and on `NothingFound404` / `DuplicateRecord409`. |
+| `schema_without_model_build`, `deco_marshal_data`, query partial-load in `make_args` | (b) | Keeps parse separate from document construction. The defaults note assigns this to the API library on purpose. |
+| `ModifiedResourceView` | (b) if the fields are generic | Adds modification metadata on write. Port only the hook. Do not bring product field names with it. |
+| `SnapshotResourceView`, `SnapModResourceView` | (c) | Snapshot soft-delete. The view initializes filters with `storagecenterSnapshotType` and `storagecenterSnapshotTime`. |
+| `BaseResourceView._has_search_field_change` | (c) | Reads `bslib.config.search_fields.SEARCH_FIELDS`. That module's enum is App Search keys for storage arrays. |
+| `BaseTaskResourceView` save-then-publish and result rehydration | (b) for the sequence, (c) for the bindings | The sequence matches the client poller. The body looks up task definitions, accepts `task` or `name`, checks `ldapRoles` plus `storagecenter_automation`, prepends `deviceNumber` to args, and stores rows through `taskslib.TaskResults`. |
+| `login.py` | (c) | Default identity URL is `https://identity-internal.api.rackspacecloud.com/v2.0`. Roles include `storagecenter_*` and `backupcenter_admins`. Account constant `storageautomation`. `PYTHON312.md` says verification is on, and the private image adds a private CA. |
+| `require_login` as a seam | (b) as a hook only | Views call it. The companion should take a callable the application supplies. The Rackspace implementation stays out. |
+| `add_celery_task`, `BSCelerySchema`, `_celery_payload`, `rabbitmq.py` | (c) | Queue name `bscelery_appsearch_tasks_queue`, task-name prefixes `app.` and `bscelery`, and a default broker URL that embeds a username, a password, and a vhost. Do not copy that URL. |
+| `TaskDispatchError` | (c) as written | The message says the task could not be added to the RabbitMQ queue. A generic publish failure can exist later, without that wording, once a publisher interface exists. |
+| `connectors/database.py` `mongo_connect` | optional (b) | Same shape as the client helper, with `BSAPI` env names. |
+| `connectors/redisclient.py` | optional (b) | Session cache used by login. Useful if an application brings its own auth. Not part of the first slice. `utcnow` is used here. |
+| `connectors/esclient.py`, `bulk()` | (d) | `pyproject.toml` says Elasticsearch is unused, kept as an extra, and still on the 7.x client. `bulk()` is called from POST when `self.bulk` is set, so the call site is live and the integration is declared deferred. Leave it out. |
+| `apilivenesscheck.py` | (c) | Reads cgroup files and writes logs to `/proc/1/fd/1`. That is a cluster probe, not the library health check. `/healthcheck` is the generic one. |
+| `resources.py` `HealthCheckView` | (b) | Returns `{"health": true, "code": 200}` when the Flask app exists. Small, and it belongs with the factory. |
+| Pagination helpers in `utils.py` | (a) overlap | The resource library already has `PaginateSchema`. The API copy should call that, not grow a second field grammar. The defaults note says the same thing. |
+
+### 6.3 Same repository or a separate one
+
+**Recommendation:** one repository, two distributions. The HTTP code lives under `api/` and imports `baseresourcelib`. `baseresourcelib` does not import it. This is not a submodule of the client package, and it is not a second GitHub repository for the first public version.
+
+Why that shape:
+
+- The private defaults note already forbids moving HTTP policy into the resource library. An optional extra inside `baseresourcelib` makes that import too easy, and it puts Flask on the client's dependency horizon the moment someone imports the wrong module.
+- A second repository repeats the problem `PYTHON312.md` describes: the API package cannot resolve until the resource package is published, and the private tree still points TasksLib at an unversioned git URL. The contract tests already cheat by putting both trees on `PYTHONPATH`.
+- The owner keeps both in one workspace and changes them against each other. One pull request can update a schema rule and the view test that locks it.
+
+| | Two distributions, this repo | Second repository |
+| --- | --- | --- |
+| Versioning | Two `pyproject.toml` versions. The API depends on a range of the client (`baseresourcelib>=0.1,<0.2` once 0.1 exists). They can tag on different days. | Same range, published on PyPI. Closest to today's 0.9.0 client and 0.5.0 API split. |
+| Release coupling | A schema break is reviewed with the view that consumes it. Publishing the client wheel still has to happen before the API wheel if the index install is the test. Local tox can install `../` first. | Every contract change is two reviews and a client release before API CI is honest. That delay is what the private migration hit. |
+| Dependency direction | API depends on the client. A CI check fails if the client imports the API. | Same direction, harder to see in one diff. |
+| Tests | `api/tox.ini` installs the sibling client, then mongomock and fakeredis. No broker. | Same tests, plus a published or git pin. |
+| Discoverability | One GitHub project, two pip names, one README section. Someone looking for the HTTP half finds the client it requires. | Easy to miss the pair. Two issue trackers. |
+
+**Proposed** layout for this repository:
+
+```text
+pyproject.toml                      # distribution baseresourcelib
+src/baseresourcelib/                # client, modes, poll, no Flask
+tests/unit/
+api/pyproject.toml                  # distribution baseresourceapi
+api/src/baseresourceapi/
+    __init__.py                     # get_app_and_api, add_api_endpoint
+    views.py                        # ResourceView
+    marshal.py                      # model_build_obj isolation
+    tasks.py                        # save, then call a publisher
+api/tests/unit/
+api/tox.ini
+```
+
+A publisher is a callable the application passes in, `(envelope) -> id`. The first tests use a list. Celery, if anyone still wants it, is an application, not this package.
+
+**Proposed** layout if a second repository is chosen later:
+
+```text
+base-resource-api/pyproject.toml    # depends on baseresourcelib from PyPI
+base-resource-api/src/baseresourceapi/
+```
+
+No `git+ssh` URL. No private package index. Open that repository only after `baseresourcelib` 0.1 is on PyPI and the view tests pass against the released wheel. Until then the sibling tree is the honest build.
+
+Names are proposals. `baseresourceapi` is the placeholder so the package is not called `bsapilib`.
+
+### 6.4 Modernization, specific to this library
+
+**Verified** from its `pyproject.toml` and `PYTHON312.md`. It already requires Python >=3.12, Hatchling, hatch-vcs, Marshmallow `>=4.3.1,<5`, and marshmallow-mongoengine `>=0.31.2,<0.32`. Tox 4 runs unittest and lint. Those are not the work.
+
+What is dated or bound to the private platform:
+
+| Item | Evidence | What to do in the companion |
+| --- | --- | --- |
+| Marshmallow 4 gaps at the HTTP boundary | Six strict xfails in `test_defaults_contract.py` | Fix them in the client field adapter (PR 3), then delete the xfails here if the API test still applies. Do not patch them only in the view. |
+| `datetime.utcnow` | Stdlib audit lists `application.py`, `login.py`, `rest_resources.py`, `redisclient.py` | The audit's rule stands: do not swap in aware datetimes without a test of the existing naive contract. The first slice can avoid new `utcnow()` calls. A sweep of the private modules is not a reason to copy them. |
+| PyMongo `>=4.17,<4.18` | `PYTHON312.md`: MongoDB 4.2.12 | Do not copy the cap unless the public package still claims that server. |
+| Flask-RESTful `>=0.3.10,<0.4` | `pyproject.toml` | The attached code is written against it. Replacing the view framework was not evaluated. Keep it for the first port. A later replacement is a rewrite, not this modernization. |
+| Elasticsearch 7 extra | `pyproject.toml` comment | Leave it out. Tag (d). |
+| Private git requirements and hatch-vcs / Jira tags | `pyproject.toml`, `PYTHON312.md` | Same decision as the client. Static versions. Public index. No git URL. |
+| Identity TLS and a private CA | `PYTHON312.md` | Stays with the identity client that is not ported. The companion's auth hook does not open that URL. |
+| Module-level `taskslib` import | `rest_resources.py` line 33 | The public view must import without `taskslib`. Result storage is a parameter. |
+
+`gunicorn`, `blinker`, `flask-cors`, and `Flask-Limiter` are current enough to keep when the factory is ported. Redis is optional at runtime because the limiter already falls back. Do not add a broker client to the install requires.
+
+This assessment did not run `pip index` and did not install the Flask stack.
+
+### 6.5 Where it sits in the plan
+
+PR 8 in section 4 is the first HTTP slice. It starts after PR 7 so the client package installs, the schema contract is the Marshmallow 4 one, and `run_task` / `poll_task` exist for the view tests to target.
+
+Order inside that later work, each still its own review:
+
+1. Factory, health check, registration, and CRUD view. Tests from `test_application_factory.py` and the non-task, non-snapshot parts of `test_rest_resource_contract.py`, rewritten onto `baseresourceapi` and mongomock.
+2. Marshal helper and the GET/PUT default rules from the defaults note. Reuse the client's pagination schema.
+3. Task view as save-then-call-publisher, with a fake publisher. Assert the row remains when the publisher raises, and that GET returns the stored response. Do not port `login.py` or `rabbitmq.py` to make this pass.
+
+The client PRs 1 through 7 do not gain a Flask dependency while this waits. If the HTTP package is rejected, those PRs are unchanged.
+
+**Not verified:** no public importer of `bsapilib` was searched. No statement here says the private package can be published as-is under the MIT license. The employer strings in section 3 apply to every file this section marks (c).
+
